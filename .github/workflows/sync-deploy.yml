@@ -1,0 +1,26 @@
+name: Sync llm-wiki.html → index.html
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'llm-wiki.html'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy llm-wiki.html to index.html
+        run: cp llm-wiki.html index.html
+
+      - name: Commit if index.html changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          git diff --cached --quiet && echo "No changes" || git commit -m "chore: auto-sync index.html from llm-wiki.html"
+          git push
