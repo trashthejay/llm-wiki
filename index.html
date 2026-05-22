@@ -639,7 +639,7 @@
 <!-- ── JAVASCRIPT ─────────────────────────────── -->
 <script>
 'use strict';
-const APP_VERSION = '1.2.3';
+const APP_VERSION = '1.2.4';
 document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
 // ─── FIREBASE CONFIG STORE ────────────────────────────────────────────────────
@@ -1504,8 +1504,9 @@ const UI = {
     this._langResolve = null;
   },
   pickLang(lang) {
+    const resolve = this._langResolve;   // capture BEFORE hide clears it
     this.hideLangPicker();
-    if (this._langResolve) this._langResolve(lang);
+    if (resolve) resolve(lang);
   },
 
   // ── PROGRESS ──
