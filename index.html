@@ -639,7 +639,7 @@
 <!-- ── JAVASCRIPT ─────────────────────────────── -->
 <script>
 'use strict';
-const APP_VERSION = '1.2.5';
+const APP_VERSION = '1.3.0';
 document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
 // ─── FIREBASE CONFIG STORE ────────────────────────────────────────────────────
@@ -789,7 +789,41 @@ const F = {
     const comments = (url.includes('milemoa.com') || finalUrl.includes('milemoa.com'))
       ? this.extractMilemoaComments(html) : [];
 
-    return { text: text.slice(0, 14000), url: finalUrl, comments };
+    // Extract all hyperlinks from the article body
+    const links = this.extractLinks(html, finalUrl);
+
+    return { text: text.slice(0, 14000), url: finalUrl, comments, links };
+  },
+
+  // Extract <a href> links from article body — skips nav/footer/sidebar
+  extractLinks(html, baseUrl) {
+    const d = document.createElement('div');
+    d.innerHTML = html;
+    d.querySelectorAll('script,style,nav,header,footer,aside,[role=navigation],[role=banner]')
+      .forEach(el => el.remove());
+
+    const links = [];
+    const seen = new Set();
+    d.querySelectorAll('a[href]').forEach(a => {
+      let href = a.getAttribute('href');
+      if (!href || href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('mailto:')) return;
+      try { href = new URL(href, baseUrl).href; } catch { return; }
+      if (!href.startsWith('http')) return;
+      if (href === baseUrl) return; // self-reference
+      if (seen.has(href)) return;
+
+      let text = (a.textContent || '').replace(/\s+/g, ' ').trim();
+      // Skip empty anchor text or anchors that are just image alt text
+      if (!text || text.length < 2 || text.length > 200) {
+        // Try alt text of nested image
+        const img = a.querySelector('img');
+        text = img ? (img.alt || '').trim() : text;
+        if (!text || text.length < 2) return;
+      }
+      seen.add(href);
+      links.push({ text: text.slice(0, 200), href });
+    });
+    return links.slice(0, 40); // cap at 40
   },
 
   // Milemoa.com comment extractor — tries common Korean CMS selectors
@@ -852,7 +886,7 @@ const G = {
     ko: '🚨 절대 규칙: 사용자가 읽는 모든 내용은 반드시 한국어로만 작성하세요. 한국어로 써야 할 필드: "overview", 모든 "sections"의 "heading"과 "content", "keyFacts", "keyPoints", "expertComments". 한국어 문장 안에 영어 단어를 섞지 마세요(브랜드명·고유명사 제외). 노션 페이지 구조용 필드만 영어로 유지: "topicTitle", "category", "subcategory", "sourceTitle".',
   },
 
-  buildPrompt(existingCats, comments, lang) {
+  buildPrompt(existingCats, comments, lang, links) {
     const langNote = this.LANG_INSTRUCTIONS[lang] || this.LANG_INSTRUCTIONS.en;
 
     let catSection = '';
@@ -881,10 +915,18 @@ const G = {
         comments.slice(0, 25).join('\n\n---\n\n').slice(0, 6000);
     }
 
+    let linkSection = '';
+    if (links && links.length > 0) {
+      linkSection = '\n\nHYPERLINKS FROM THE ARTICLE (use these to fill the "references" field):\n' +
+        'Include ALL substantive links — product pages, articles, official sources, related guides. ' +
+        'SKIP ONLY: site navigation, login/signup, author profiles, ads, social-share buttons.\n\n' +
+        links.map((l, i) => `${i+1}. "${l.text}" → ${l.href}`).join('\n').slice(0, 4000);
+    }
+
     return `${langNote}
 
 You are a personal knowledge wiki assistant. Create a DETAILED, thorough wiki entry — think Wikipedia depth, not a brief summary. A reader should walk away fully informed on this topic.
-${catSection}${commentSection}
+${catSection}${commentSection}${linkSection}
 
 Return a JSON object with EXACTLY these fields:
 {
@@ -902,6 +944,7 @@ Return a JSON object with EXACTLY these fields:
   "keyFacts": ["Concrete fact with specific number/date/name — e.g. Minimum spend: $4,000 in 3 months", "Another specific fact"],
   "keyPoints": ["Actionable takeaway for future reference", "Another actionable insight"],
   "expertComments": ${comments && comments.length ? '["paraphrased expert insight from a comment", "another if found"]' : '[]'},
+  "references": ${links && links.length ? '[{"title": "anchor text or descriptive title (in target language is fine)", "url": "https://..."}]' : '[]'},
   "categoryStatus": "existing" or "new" or "evolved",
   "evolutionSuggestion": null or {
     "currentCategory": "existing category name",
@@ -913,6 +956,7 @@ Return a JSON object with EXACTLY these fields:
 
 IMPORTANT: "sections" must have 2-4 substantive sections. Each section "content" must be detailed — at least 3 paragraphs. This is a WIKI, not a summary.
 ${comments && comments.length ? '\nFor "expertComments": include only the insights that genuinely add value or correct errors. Empty array if none qualify.' : ''}
+${links && links.length ? '\nFor "references": include EVERY substantive link from the HYPERLINKS list above (product pages, articles, official docs, related guides). Only skip pure navigation/login/ad links.' : ''}
 
 FINAL CHECK BEFORE RETURNING: Re-read the LANGUAGE RULE at the top. Every "heading", "overview", "content", "keyFacts" item, "keyPoints" item, and "expertComments" item MUST be in the required language. Do NOT mix languages in reader-facing fields.
 
@@ -950,14 +994,14 @@ Return ONLY valid JSON. No markdown, no code fences, no explanation.`;
     }
   },
 
-  buildUrlParts(text, cats, comments, lang) {
-    return [{ text: this.buildPrompt(cats, comments, lang) + '\n\nContent to analyze:\n---\n' + text + '\n---' }];
+  buildUrlParts(text, cats, comments, lang, links) {
+    return [{ text: this.buildPrompt(cats, comments, lang, links) + '\n\nContent to analyze:\n---\n' + text + '\n---' }];
   },
 
   buildImageParts(base64, mimeType, cats, lang) {
     return [
       { inline_data: { mime_type: mimeType, data: base64 } },
-      { text: this.buildPrompt(cats, [], lang) + '\n\nAnalyze the content shown in this screenshot/image.' }
+      { text: this.buildPrompt(cats, [], lang, []) + '\n\nAnalyze the content shown in this screenshot/image.' }
     ];
   }
 };
@@ -1119,6 +1163,19 @@ function buildWikiBlocks(analysis, version, date, sources, archived) {
     analysis.expertComments.forEach(c => blk.push(li(c)));
   }
 
+  // References — every clickable link from the original article
+  if (analysis.references && analysis.references.length > 0) {
+    blk.push(h2('References'));
+    analysis.references.forEach(r => {
+      if (r && r.url) {
+        blk.push({ object:'block', type:'bulleted_list_item',
+          bulleted_list_item:{ rich_text:[
+            { type:'text', text:{ content: String(r.title || r.url).slice(0,200), link:{ url: r.url } } }
+          ]} });
+      }
+    });
+  }
+
   blk.push(h2('Sources Ingested'));
   sources.forEach(src => {
     if (src.url) {
@@ -1169,7 +1226,7 @@ const W = {
   _state: null,
 
   async analyze(source, type) {
-    let contentText = '', sourceUrl = '', sourceTitle = '', comments = [];
+    let contentText = '', sourceUrl = '', sourceTitle = '', comments = [], links = [];
     let existingCats = []; // [{ name, rawId, topics: [{ title, rawId }] }]
     let wikiLang = 'en'; // default English; may be overridden by lang picker
 
@@ -1187,7 +1244,7 @@ const W = {
         let fetched;
         try { fetched = await F.fetchUrl(source); }
         catch (e) { throw new Error('Step 1 – ' + e.message); }
-        contentText = fetched.text; sourceUrl = fetched.url; comments = fetched.comments || [];
+        contentText = fetched.text; sourceUrl = fetched.url; comments = fetched.comments || []; links = fetched.links || [];
 
         // Fallback heuristic for Korean pages on unlisted domains
         if (wikiLang === 'en' && isKoreanContent(contentText, sourceUrl)) {
@@ -1213,7 +1270,7 @@ const W = {
       // Step 3 — Gemini analysis with full category context
       UI.setStep(2, 'active'); UI.setLabel('Analyzing with Gemini Flash…');
       const parts = type === 'url'
-        ? G.buildUrlParts(contentText, existingCats, comments, wikiLang)
+        ? G.buildUrlParts(contentText, existingCats, comments, wikiLang, links)
         : G.buildImageParts(source.base64, source.mimeType, existingCats, wikiLang);
 
       let analysis;
