@@ -8,6 +8,9 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="My Wiki" />
   <title>Personal LLM Wiki</title>
+  <!-- Firebase compat SDK (Google Auth) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -24,6 +27,9 @@
       --success:     #10b981;
       --warn:        #f59e0b;
       --error:       #ef4444;
+      --evolved:     #c084fc;
+      --evolved-bg:  #1e1030;
+      --evolved-bdr: #6d28d9;
       --radius:      12px;
       --radius-sm:   8px;
     }
@@ -45,6 +51,72 @@
       padding-bottom: env(safe-area-inset-bottom, 0);
     }
 
+    /* ── AUTH OVERLAY ── */
+    #auth-overlay {
+      position: fixed; inset: 0;
+      z-index: 200;
+      background: var(--bg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    #auth-overlay.hidden { display: none; }
+
+    .auth-card {
+      width: 100%;
+      max-width: 360px;
+      text-align: center;
+    }
+    .auth-logo { font-size: 52px; margin-bottom: 16px; }
+    .auth-title { font-size: 22px; font-weight: 800; margin-bottom: 6px; }
+    .auth-sub { font-size: 14px; color: var(--muted); margin-bottom: 28px; }
+
+    .google-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      width: 100%;
+      padding: 13px 20px;
+      background: #fff;
+      color: #3c4043;
+      border: none;
+      border-radius: var(--radius-sm);
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-bottom: 16px;
+      transition: box-shadow 0.15s;
+    }
+    .google-btn:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
+    .google-btn svg { width: 18px; height: 18px; flex-shrink: 0; }
+
+    .auth-divider {
+      display: flex; align-items: center; gap: 10px;
+      margin-bottom: 20px;
+    }
+    .auth-divider::before, .auth-divider::after {
+      content: ''; flex: 1; height: 1px; background: var(--border);
+    }
+    .auth-divider span { font-size: 11px; color: var(--muted); }
+
+    .firebase-setup-toggle {
+      background: none; border: none; color: var(--muted);
+      font-size: 12px; cursor: pointer; text-decoration: underline;
+      margin-bottom: 16px; display: block; width: 100%; text-align: center;
+    }
+
+    .firebase-fields { display: none; text-align: left; }
+    .firebase-fields.open { display: block; }
+
+    .auth-note {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.5;
+      margin-top: 16px;
+    }
+
     /* ── TOP BAR ── */
     header {
       position: sticky;
@@ -58,545 +130,353 @@
       backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px);
       border-bottom: 1px solid var(--border);
-      gap: 10px;
+      gap: 8px;
     }
 
-    header h1 {
-      flex: 1;
-      font-size: 17px;
-      font-weight: 700;
-      letter-spacing: -0.3px;
-      color: var(--text);
-    }
+    header h1 { flex: 1; font-size: 17px; font-weight: 700; letter-spacing: -0.3px; }
 
     #settings-btn {
-      background: none;
-      border: none;
-      cursor: pointer;
-      color: var(--muted);
-      padding: 6px;
-      border-radius: 8px;
-      font-size: 18px;
-      line-height: 1;
-      transition: color 0.15s;
+      background: none; border: none; cursor: pointer;
+      color: var(--muted); padding: 6px; border-radius: 8px;
+      font-size: 18px; line-height: 1; transition: color 0.15s;
     }
     #settings-btn:hover { color: var(--text); }
 
+    .user-pill {
+      display: flex; align-items: center; gap: 6px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 20px; padding: 3px 10px 3px 4px;
+      cursor: pointer; transition: border-color 0.15s;
+    }
+    .user-pill:hover { border-color: var(--accent); }
+    .user-avatar { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; background: var(--border); }
+    .user-name { font-size: 12px; font-weight: 500; max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
     .version-badge {
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--muted);
-      background: var(--surface2);
-      padding: 3px 8px;
-      border-radius: 20px;
-      border: 1px solid var(--border);
-      white-space: nowrap;
+      font-size: 11px; font-weight: 600; color: var(--muted);
+      background: var(--surface2); padding: 3px 8px;
+      border-radius: 20px; border: 1px solid var(--border); white-space: nowrap;
     }
 
     /* ── MAIN ── */
     main {
-      flex: 1;
-      max-width: 480px;
-      width: 100%;
-      margin: 0 auto;
-      padding: 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
+      flex: 1; max-width: 480px; width: 100%;
+      margin: 0 auto; padding: 16px;
+      display: flex; flex-direction: column; gap: 14px;
     }
 
     /* ── SETUP BANNER ── */
     .setup-banner {
-      background: var(--accent-glow);
-      border: 1px solid var(--accent);
-      border-radius: var(--radius);
-      padding: 16px;
-      display: flex;
-      align-items: center;
-      gap: 12px;
+      background: var(--accent-glow); border: 1px solid var(--accent);
+      border-radius: var(--radius); padding: 16px;
+      display: flex; align-items: center; gap: 12px;
     }
     .setup-banner .icon { font-size: 24px; flex-shrink: 0; }
     .setup-banner h2 { font-size: 14px; font-weight: 600; margin-bottom: 2px; }
     .setup-banner p { font-size: 12px; color: var(--muted); }
     .setup-banner .setup-link {
       margin-left: auto; flex-shrink: 0;
-      background: var(--accent);
-      color: #fff;
-      border: none;
-      border-radius: var(--radius-sm);
-      padding: 8px 14px;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
+      background: var(--accent); color: #fff; border: none;
+      border-radius: var(--radius-sm); padding: 8px 14px;
+      font-size: 13px; font-weight: 600; cursor: pointer;
     }
 
     /* ── CARD ── */
-    .card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      overflow: hidden;
-    }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 
     /* ── TABS ── */
-    .tab-bar {
-      display: flex;
-      border-bottom: 1px solid var(--border);
-    }
+    .tab-bar { display: flex; border-bottom: 1px solid var(--border); }
     .tab {
-      flex: 1;
-      padding: 12px;
-      text-align: center;
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--muted);
-      cursor: pointer;
-      background: none;
-      border: none;
-      border-bottom: 2px solid transparent;
-      margin-bottom: -1px;
+      flex: 1; padding: 12px; text-align: center;
+      font-size: 13px; font-weight: 600; color: var(--muted);
+      cursor: pointer; background: none; border: none;
+      border-bottom: 2px solid transparent; margin-bottom: -1px;
       transition: color 0.15s, border-color 0.15s;
     }
     .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-
     .tab-panel { display: none; padding: 16px; }
     .tab-panel.active { display: block; }
 
-    /* ── URL INPUT ── */
-    .input-row {
-      display: flex;
-      gap: 8px;
-    }
+    /* ── INPUTS ── */
+    .input-row { display: flex; gap: 8px; }
     .url-input {
-      flex: 1;
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      color: var(--text);
-      font-size: 14px;
-      padding: 11px 14px;
-      outline: none;
-      transition: border-color 0.15s;
+      flex: 1; background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); color: var(--text); font-size: 14px;
+      padding: 11px 14px; outline: none; transition: border-color 0.15s;
     }
     .url-input:focus { border-color: var(--accent); }
     .url-input::placeholder { color: var(--muted); }
 
-    /* ── BUTTONS ── */
     .btn {
-      padding: 11px 20px;
-      border-radius: var(--radius-sm);
-      font-size: 14px;
-      font-weight: 600;
-      border: none;
-      cursor: pointer;
-      transition: opacity 0.15s;
-      white-space: nowrap;
+      padding: 11px 20px; border-radius: var(--radius-sm);
+      font-size: 14px; font-weight: 600; border: none;
+      cursor: pointer; transition: opacity 0.15s; white-space: nowrap;
     }
     .btn:disabled { opacity: 0.45; cursor: not-allowed; }
     .btn-primary { background: var(--accent); color: #fff; }
     .btn-primary:not(:disabled):hover { background: var(--accent-dim); }
-    .btn-ghost {
-      background: var(--surface2);
-      color: var(--text);
-      border: 1px solid var(--border);
-    }
+    .btn-ghost { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
     .btn-danger { background: #3a1a1a; color: var(--error); border: 1px solid #5a1a1a; }
     .btn-success { background: #0d2e22; color: var(--success); border: 1px solid #1a5a3a; }
+    .btn-sm { padding: 7px 14px; font-size: 12px; }
 
     /* ── DROP ZONE ── */
     .drop-zone {
-      border: 2px dashed var(--border);
-      border-radius: var(--radius);
-      padding: 32px 16px;
-      text-align: center;
-      cursor: pointer;
+      border: 2px dashed var(--border); border-radius: var(--radius);
+      padding: 32px 16px; text-align: center; cursor: pointer;
       transition: border-color 0.15s, background 0.15s;
     }
-    .drop-zone:hover, .drop-zone.drag-over {
-      border-color: var(--accent);
-      background: var(--accent-glow);
-    }
+    .drop-zone:hover, .drop-zone.drag-over { border-color: var(--accent); background: var(--accent-glow); }
     .drop-zone .dz-icon { font-size: 36px; margin-bottom: 10px; }
     .drop-zone h3 { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
     .drop-zone p { font-size: 12px; color: var(--muted); }
-    .drop-zone .preview-img {
-      max-width: 100%; max-height: 180px;
-      border-radius: var(--radius-sm);
-      margin-bottom: 10px;
-      object-fit: contain;
-    }
+    .drop-zone .preview-img { max-width: 100%; max-height: 180px; border-radius: var(--radius-sm); margin-bottom: 10px; object-fit: contain; }
     #file-input { display: none; }
 
     /* ── PROGRESS ── */
-    #progress {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 16px;
-      display: none;
-    }
+    #progress { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; display: none; }
     #progress.visible { display: block; }
-
-    .progress-steps {
-      display: flex;
-      gap: 0;
-      margin-bottom: 12px;
-    }
+    .progress-steps { display: flex; gap: 0; margin-bottom: 12px; }
     .step {
-      flex: 1;
-      text-align: center;
-      font-size: 11px;
-      color: var(--muted);
-      position: relative;
-      padding-top: 28px;
+      flex: 1; text-align: center; font-size: 11px; color: var(--muted);
+      position: relative; padding-top: 28px;
     }
     .step::before {
-      content: attr(data-n);
-      position: absolute;
-      top: 0; left: 50%;
-      transform: translateX(-50%);
-      width: 20px; height: 20px;
-      border-radius: 50%;
-      background: var(--surface2);
-      border: 2px solid var(--border);
-      font-size: 10px;
-      font-weight: 700;
-      line-height: 16px;
-      text-align: center;
-      transition: all 0.3s;
+      content: attr(data-n); position: absolute; top: 0; left: 50%;
+      transform: translateX(-50%); width: 20px; height: 20px;
+      border-radius: 50%; background: var(--surface2); border: 2px solid var(--border);
+      font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; transition: all 0.3s;
     }
     .step::after {
-      content: '';
-      position: absolute;
-      top: 9px; left: calc(50% + 10px);
-      width: calc(100% - 20px);
-      height: 2px;
-      background: var(--border);
+      content: ''; position: absolute; top: 9px; left: calc(50% + 10px);
+      width: calc(100% - 20px); height: 2px; background: var(--border);
     }
     .step:last-child::after { display: none; }
     .step.done::before { background: var(--success); border-color: var(--success); color: #fff; content: '✓'; }
     .step.active::before { background: var(--accent); border-color: var(--accent); color: #fff; }
     .step.active { color: var(--text); }
-
-    .progress-label {
-      font-size: 13px;
-      color: var(--muted);
-      text-align: center;
-    }
+    .progress-label { font-size: 13px; color: var(--muted); text-align: center; }
     .spinner {
-      display: inline-block;
-      width: 12px; height: 12px;
-      border: 2px solid var(--border);
-      border-top-color: var(--accent);
-      border-radius: 50%;
-      animation: spin 0.7s linear infinite;
-      margin-right: 6px;
-      vertical-align: -1px;
+      display: inline-block; width: 12px; height: 12px;
+      border: 2px solid var(--border); border-top-color: var(--accent);
+      border-radius: 50%; animation: spin 0.7s linear infinite;
+      margin-right: 6px; vertical-align: -1px;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* ── PREVIEW CARD ── */
-    #preview {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      overflow: hidden;
-      display: none;
-    }
+    /* ── PREVIEW ── */
+    #preview { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; display: none; }
     #preview.visible { display: block; }
 
-    .preview-header {
-      padding: 14px 16px 10px;
-      border-bottom: 1px solid var(--border);
-    }
-    .preview-label {
-      font-size: 11px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.6px;
-      color: var(--muted);
-      margin-bottom: 6px;
-    }
-    .category-path {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      flex-wrap: wrap;
-    }
+    .preview-header { padding: 14px 16px 10px; border-bottom: 1px solid var(--border); }
+    .preview-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); margin-bottom: 8px; }
+    .category-path { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
     .cat-badge {
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 4px 10px;
-      font-size: 13px;
-      font-weight: 600;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 6px; padding: 4px 10px; font-size: 13px; font-weight: 600;
     }
     .cat-sep { color: var(--muted); font-size: 14px; }
-    .action-badge {
-      margin-left: auto;
-      font-size: 11px;
-      font-weight: 600;
-      padding: 4px 10px;
-      border-radius: 6px;
-    }
-    .action-badge.new { background: #0d2e22; color: var(--success); }
+
+    /* ── STATUS BADGES (visual distinction) ── */
+    .status-badge { padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; }
+    .badge-existing-page { background: #0d2217; color: #4ade80; border: 1px solid #1a5a30; } /* ✓ green — page already in Notion */
+    .badge-existing-cat  { background: #0d2217; color: #86efac; border: 1px solid #1a5a30; } /* green — new page, existing category */
+    .badge-new           { background: var(--accent-glow); color: #a5b4fc; border: 1px solid var(--accent); } /* blue — brand new category + page */
+    .badge-evolved       { background: var(--evolved-bg); color: var(--evolved); border: 1px solid var(--evolved-bdr); } /* purple — AI evolution suggestion */
+
+    .action-badge { font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 6px; }
     .action-badge.update { background: #2a1e0d; color: var(--warn); }
 
-    .preview-body { padding: 14px 16px; }
-    .preview-summary {
-      font-size: 13px;
-      color: var(--muted);
-      line-height: 1.6;
-      margin-bottom: 14px;
-      display: -webkit-box;
-      -webkit-line-clamp: 4;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
+    /* ── EVOLUTION PANEL ── */
+    .evolution-panel {
+      margin: 0;
+      background: var(--evolved-bg);
+      border-top: 1px solid var(--evolved-bdr);
+      padding: 14px 16px;
+      display: none;
     }
+    .evolution-panel.visible { display: flex; gap: 12px; }
+    .evolution-icon { font-size: 20px; flex-shrink: 0; margin-top: 1px; }
+    .evolution-body { flex: 1; min-width: 0; }
+    .evolution-title { font-size: 13px; font-weight: 700; color: var(--evolved); margin-bottom: 4px; }
+    .evolution-reason { font-size: 12px; color: #a78bfa; line-height: 1.5; margin-bottom: 10px; }
+    .evolution-choices { display: flex; gap: 8px; flex-wrap: wrap; }
+    .evo-btn {
+      padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 600;
+      border: 1px solid var(--evolved-bdr); cursor: pointer; transition: all 0.15s;
+    }
+    .evo-btn.suggest { background: var(--evolved-bg); color: var(--evolved); }
+    .evo-btn.suggest.selected { background: var(--evolved-bdr); color: #fff; }
+    .evo-btn.keep { background: var(--surface2); color: var(--muted); border-color: var(--border); }
+    .evo-btn.keep.selected { background: var(--surface2); color: var(--text); border-color: var(--text); }
 
+    /* ── PREVIEW BODY ── */
+    .preview-body { padding: 14px 16px; }
+    .preview-summary { font-size: 13px; color: var(--muted); line-height: 1.6; margin-bottom: 14px; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
     .preview-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
-    /* inline category editor */
     .cat-edit { display: none; padding: 12px 16px; border-top: 1px solid var(--border); }
     .cat-edit.visible { display: block; }
     .cat-edit label { font-size: 12px; color: var(--muted); margin-bottom: 4px; display: block; }
     .cat-edit .row { display: flex; gap: 8px; margin-bottom: 8px; }
     .cat-input {
-      flex: 1;
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      color: var(--text);
-      font-size: 13px;
-      padding: 8px 12px;
-      outline: none;
+      flex: 1; background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); color: var(--text); font-size: 13px; padding: 8px 12px; outline: none;
     }
     .cat-input:focus { border-color: var(--accent); }
 
     /* ── ACTIVITY ── */
-    #activity {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      overflow: hidden;
-    }
-    .activity-header {
-      padding: 12px 16px;
-      border-bottom: 1px solid var(--border);
-      font-size: 12px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      color: var(--muted);
-    }
+    #activity { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+    .activity-header { padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
     .activity-list { padding: 4px 0; }
-    .activity-item {
-      display: flex;
-      align-items: flex-start;
-      gap: 10px;
-      padding: 10px 16px;
-      border-bottom: 1px solid var(--border);
-    }
+    .activity-item { display: flex; align-items: flex-start; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
     .activity-item:last-child { border-bottom: none; }
-    .activity-dot {
-      width: 8px; height: 8px;
-      border-radius: 50%;
-      margin-top: 5px;
-      flex-shrink: 0;
-    }
+    .activity-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
     .dot-new { background: var(--success); }
     .dot-update { background: var(--warn); }
     .activity-info { flex: 1; min-width: 0; }
     .activity-path { font-size: 13px; font-weight: 600; }
     .activity-sub { font-size: 11px; color: var(--muted); margin-top: 1px; }
-    .activity-empty {
-      padding: 24px 16px;
-      text-align: center;
-      color: var(--muted);
-      font-size: 13px;
-    }
+    .activity-empty { padding: 24px 16px; text-align: center; color: var(--muted); font-size: 13px; }
 
     /* ── TOAST ── */
     #toast {
-      position: fixed;
-      bottom: calc(24px + env(safe-area-inset-bottom, 0));
-      left: 50%; transform: translateX(-50%);
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      border-radius: 24px;
-      padding: 10px 20px;
-      font-size: 13px;
-      font-weight: 500;
-      white-space: nowrap;
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity 0.2s, transform 0.2s;
+      position: fixed; bottom: calc(24px + env(safe-area-inset-bottom, 0)); left: 50%;
+      transform: translateX(-50%); background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 24px; padding: 10px 20px; font-size: 13px; font-weight: 500;
+      white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 0.2s;
       z-index: 100;
     }
     #toast.show { opacity: 1; }
 
     /* ── MODAL ── */
     .modal-overlay {
-      position: fixed; inset: 0;
-      background: rgba(0,0,0,0.7);
-      backdrop-filter: blur(4px);
-      -webkit-backdrop-filter: blur(4px);
-      z-index: 50;
-      display: flex;
-      align-items: flex-end;
-      justify-content: center;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.2s;
+      position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+      backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+      z-index: 50; display: flex; align-items: flex-end; justify-content: center;
+      opacity: 0; pointer-events: none; transition: opacity 0.2s;
     }
-    .modal-overlay.open {
-      opacity: 1;
-      pointer-events: all;
-    }
+    .modal-overlay.open { opacity: 1; pointer-events: all; }
     .modal-sheet {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 20px 20px 0 0;
-      width: 100%;
-      max-width: 480px;
-      max-height: 90dvh;
-      overflow-y: auto;
-      padding: 0;
-      transform: translateY(40px);
-      transition: transform 0.25s ease;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 20px 20px 0 0; width: 100%; max-width: 480px;
+      max-height: 90dvh; overflow-y: auto;
+      transform: translateY(40px); transition: transform 0.25s ease;
     }
     .modal-overlay.open .modal-sheet { transform: translateY(0); }
-
-    .modal-handle {
-      width: 36px; height: 4px;
-      background: var(--border);
-      border-radius: 2px;
-      margin: 12px auto 0;
-    }
-    .modal-header {
-      display: flex;
-      align-items: center;
-      padding: 14px 16px 12px;
-      border-bottom: 1px solid var(--border);
-    }
+    .modal-handle { width: 36px; height: 4px; background: var(--border); border-radius: 2px; margin: 12px auto 0; }
+    .modal-header { display: flex; align-items: center; padding: 14px 16px 12px; border-bottom: 1px solid var(--border); }
     .modal-title { font-size: 16px; font-weight: 700; flex: 1; }
-    .modal-close {
-      background: var(--surface2);
-      border: none;
-      color: var(--muted);
-      cursor: pointer;
-      width: 30px; height: 30px;
-      border-radius: 50%;
-      font-size: 16px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
+    .modal-close { background: var(--surface2); border: none; color: var(--muted); cursor: pointer; width: 30px; height: 30px; border-radius: 50%; font-size: 16px; display: flex; align-items: center; justify-content: center; }
     .modal-body { padding: 16px; }
 
     .field { margin-bottom: 16px; }
     .field label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 6px; letter-spacing: 0.3px; }
-    .field input, .field textarea {
-      width: 100%;
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      color: var(--text);
-      font-size: 14px;
-      padding: 11px 14px;
-      outline: none;
-      font-family: inherit;
+    .field input, .field select {
+      width: 100%; background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); color: var(--text); font-size: 14px;
+      padding: 11px 14px; outline: none; font-family: inherit;
     }
-    .field input:focus, .field textarea:focus { border-color: var(--accent); }
+    .field input:focus, .field select:focus { border-color: var(--accent); }
     .field .hint { font-size: 11px; color: var(--muted); margin-top: 5px; line-height: 1.4; }
     .field .warn-hint { color: var(--warn); }
 
-    .section-header {
-      font-size: 11px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.6px;
-      color: var(--muted);
-      padding: 12px 0 8px;
-      border-bottom: 1px solid var(--border);
-      margin-bottom: 14px;
-    }
+    .section-header { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); padding: 12px 0 8px; border-bottom: 1px solid var(--border); margin-bottom: 14px; }
+
+    .signout-row { display: flex; align-items: center; gap: 10px; padding: 12px 0; border-top: 1px solid var(--border); margin-top: 4px; }
+    .signout-row img { width: 32px; height: 32px; border-radius: 50%; }
+    .signout-row .who { flex: 1; font-size: 13px; font-weight: 500; }
+    .signout-row .who span { display: block; font-size: 11px; color: var(--muted); font-weight: 400; }
 
     /* Shortcut guide */
-    .shortcut-step {
-      display: flex;
-      gap: 12px;
-      margin-bottom: 16px;
-    }
-    .shortcut-num {
-      width: 26px; height: 26px;
-      border-radius: 50%;
-      background: var(--accent);
-      color: #fff;
-      font-size: 13px;
-      font-weight: 700;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-      margin-top: 1px;
-    }
+    .shortcut-step { display: flex; gap: 12px; margin-bottom: 16px; }
+    .shortcut-num { width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
     .shortcut-text { font-size: 13px; line-height: 1.5; }
     .shortcut-text strong { color: var(--text); }
     .shortcut-text span { color: var(--muted); }
-    .code-block {
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      padding: 10px 14px;
-      font-family: 'SF Mono', monospace;
-      font-size: 12px;
-      color: var(--accent-dim);
-      word-break: break-all;
-      margin-top: 8px;
-      cursor: pointer;
-      user-select: all;
-    }
+    .code-block { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 14px; font-family: 'SF Mono', monospace; font-size: 12px; color: var(--accent-dim); word-break: break-all; margin-top: 8px; cursor: pointer; user-select: all; }
   </style>
 </head>
 <body>
+
+<!-- ── AUTH OVERLAY ──────────────────────────── -->
+<div id="auth-overlay">
+  <div class="auth-card">
+    <div class="auth-logo">🧠</div>
+    <h1 class="auth-title">My Wiki</h1>
+    <p class="auth-sub">Your personal AI-powered knowledge base</p>
+
+    <button class="google-btn" id="google-signin-btn" style="display:none">
+      <svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+      Sign in with Google
+    </button>
+
+    <div class="auth-divider" id="auth-divider" style="display:none"><span>or</span></div>
+
+    <button class="firebase-setup-toggle" id="fb-toggle">First time? Set up Firebase →</button>
+
+    <div class="firebase-fields" id="firebase-fields">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.6;">
+        Create a free project at <strong style="color:var(--text)">firebase.google.com</strong>, enable Google Sign-In, then paste your config below.
+      </div>
+      <div class="field">
+        <label>API KEY</label>
+        <input type="password" id="fb-api-key" placeholder="AIzaSy…" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label>AUTH DOMAIN</label>
+        <input type="text" id="fb-auth-domain" placeholder="project-id.firebaseapp.com" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label>PROJECT ID</label>
+        <input type="text" id="fb-project-id" placeholder="project-id" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label>APP ID</label>
+        <input type="text" id="fb-app-id" placeholder="1:123456:web:abc…" autocomplete="off" />
+      </div>
+      <button class="btn btn-primary" id="fb-save-btn" style="width:100%;margin-bottom:16px">Save & Enable Sign-In</button>
+    </div>
+
+    <p class="auth-note">Each user signs in with their own Google account and configures their own Notion + Gemini API keys. Nothing is shared between accounts.</p>
+  </div>
+</div>
 
 <!-- ── TOP BAR ───────────────────────────────── -->
 <header>
   <h1>🧠 My Wiki</h1>
   <button id="settings-btn" title="Settings">⚙️</button>
-  <span class="version-badge" id="version-badge">v1.0.0</span>
+  <div class="user-pill" id="user-pill" title="Account" style="display:none">
+    <img class="user-avatar" id="user-avatar" alt="" />
+    <span class="user-name" id="user-name"></span>
+  </div>
+  <span class="version-badge" id="version-badge">v1.1.0</span>
 </header>
 
 <!-- ── MAIN CONTENT ──────────────────────────── -->
 <main>
 
-  <!-- Setup banner (hidden once configured) -->
   <div class="setup-banner" id="setup-banner">
     <span class="icon">🔑</span>
     <div>
       <h2>Setup required</h2>
-      <p>Add your Notion & Gemini API keys to get started.</p>
+      <p>Add your Notion &amp; Gemini API keys to get started.</p>
     </div>
     <button class="setup-link" id="setup-link-btn">Setup</button>
   </div>
 
-  <!-- Input card -->
   <div class="card" id="input-card">
     <div class="tab-bar">
       <button class="tab active" data-tab="url">🔗 URL</button>
       <button class="tab" data-tab="screenshot">📸 Screenshot</button>
     </div>
-
-    <!-- URL tab -->
     <div class="tab-panel active" id="tab-url">
       <div class="input-row">
         <input type="url" class="url-input" id="url-input" placeholder="Paste a link…" autocomplete="off" />
         <button class="btn btn-primary" id="process-btn">Analyze</button>
       </div>
     </div>
-
-    <!-- Screenshot tab -->
     <div class="tab-panel" id="tab-screenshot">
       <div class="drop-zone" id="drop-zone">
         <div class="dz-icon">📷</div>
@@ -607,7 +487,6 @@
     </div>
   </div>
 
-  <!-- Progress indicator -->
   <div id="progress">
     <div class="progress-steps" id="progress-steps"></div>
     <div class="progress-label" id="progress-label"></div>
@@ -619,11 +498,25 @@
       <div class="preview-label">Suggested wiki page</div>
       <div class="category-path" id="preview-path"></div>
     </div>
+
+    <!-- AI evolution suggestion panel (purple) — shown only when AI suggests reorganization -->
+    <div class="evolution-panel" id="evolution-panel">
+      <div class="evolution-icon">🤖</div>
+      <div class="evolution-body">
+        <div class="evolution-title">AI suggests reorganizing your wiki</div>
+        <div class="evolution-reason" id="evolution-reason"></div>
+        <div class="evolution-choices">
+          <button class="evo-btn suggest selected" id="evo-use-btn">✨ Use AI suggestion</button>
+          <button class="evo-btn keep" id="evo-keep-btn">Keep existing structure</button>
+        </div>
+      </div>
+    </div>
+
     <div class="preview-body">
       <div class="preview-summary" id="preview-summary"></div>
       <div class="preview-actions">
         <button class="btn btn-success" id="confirm-btn">✓ Confirm</button>
-        <button class="btn btn-ghost" id="edit-cat-btn">✎ Change category</button>
+        <button class="btn btn-ghost" id="edit-cat-btn">✎ Change</button>
         <button class="btn btn-danger" id="cancel-btn">✕ Cancel</button>
       </div>
     </div>
@@ -634,7 +527,7 @@
           <input class="cat-input" id="cat-input" placeholder="e.g. Travel" />
         </div>
         <div style="flex:1">
-          <label style="font-size:12px;color:var(--muted);margin-bottom:4px;display:block">Sub-category (page title)</label>
+          <label style="font-size:12px;color:var(--muted);margin-bottom:4px;display:block">Sub-category</label>
           <input class="cat-input" id="sub-input" placeholder="e.g. Mexico City" />
         </div>
       </div>
@@ -642,7 +535,6 @@
     </div>
   </div>
 
-  <!-- Recent activity -->
   <div id="activity">
     <div class="activity-header">Recent Activity</div>
     <div class="activity-list" id="activity-list">
@@ -652,7 +544,6 @@
 
 </main>
 
-<!-- ── TOAST ──────────────────────────────────── -->
 <div id="toast"></div>
 
 <!-- ── SETTINGS MODAL ─────────────────────────── -->
@@ -664,75 +555,69 @@
       <button class="modal-close" id="settings-close">✕</button>
     </div>
     <div class="modal-body">
+
+      <!-- Signed-in account row -->
+      <div class="signout-row" id="signout-row" style="display:none">
+        <img id="settings-avatar" alt="" />
+        <div class="who" id="settings-who"></div>
+        <button class="btn btn-ghost btn-sm" id="signout-btn">Sign out</button>
+      </div>
+
       <div class="section-header">API Keys</div>
 
       <div class="field">
         <label>NOTION INTEGRATION TOKEN</label>
-        <input type="password" id="s-notion-token" placeholder="secret_…" autocomplete="off" />
-        <div class="hint">Create at <strong>developers.notion.com</strong> → New integration. Share your root wiki page with the integration.</div>
+        <input type="password" id="s-notion-token" placeholder="ntn_… or secret_…" autocomplete="off" />
+        <div class="hint">From <strong>developers.notion.com</strong> → Personal access tokens. Share your root wiki page with the integration.</div>
       </div>
-
       <div class="field">
         <label>GEMINI API KEY</label>
         <input type="password" id="s-gemini-key" placeholder="AIza…" autocomplete="off" />
         <div class="hint">Free at <strong>aistudio.google.com</strong> → Get API key. 1,500 requests/day free.</div>
       </div>
-
       <div class="field">
         <label>NOTION ROOT PAGE ID</label>
-        <input type="text" id="s-root-page-id" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off" />
-        <div class="hint">Open your "Personal Wiki" Notion page → Share → Copy link. The 32-char ID is at the end of the URL.</div>
+        <input type="text" id="s-root-page-id" placeholder="Paste full Notion URL or 32-char ID" autocomplete="off" />
+        <div class="hint">Open your "Personal Wiki" Notion page → copy the full URL and paste it here.</div>
       </div>
-
       <div class="field">
         <label>WIKI LANGUAGE</label>
-        <select id="s-language" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:14px;padding:11px 14px;outline:none;font-family:inherit;">
+        <select id="s-language">
           <option value="auto">🌐 Auto-detect (matches source language)</option>
           <option value="ko">🇰🇷 한국어 (Korean)</option>
           <option value="en">🇺🇸 English</option>
         </select>
-        <div class="hint">Controls the language of Summary and Key Points written to Notion. Category and page titles are always in English.</div>
+        <div class="hint">Controls the language of Summary and Key Points. Category and page titles are always in English.</div>
       </div>
 
-      <div class="hint warn-hint" style="margin-bottom:16px;">
-        ⚠️ Notion API calls are routed through corsproxy.io to handle browser CORS restrictions. Your token is included in these requests. This is a personal tool — use accordingly.
+      <div class="hint warn-hint" style="margin-bottom:16px">
+        ⚠️ Notion API calls are proxied through corsproxy.io (browser CORS limitation). Your token is included in transit. This is a personal tool — use accordingly.
       </div>
 
       <button class="btn btn-primary" id="s-save-btn" style="width:100%;margin-bottom:14px">Save Settings</button>
 
       <div class="section-header">iPhone Setup (iOS Shortcut)</div>
-
       <div class="shortcut-step">
         <div class="shortcut-num">1</div>
-        <div class="shortcut-text">
-          <strong>Open the Shortcuts app</strong><br/>
-          <span>Create a new shortcut and tap the <strong>+</strong> button.</span>
-        </div>
+        <div class="shortcut-text"><strong>Open Shortcuts app</strong><br/><span>Create a new shortcut and tap <strong>+</strong>.</span></div>
       </div>
       <div class="shortcut-step">
         <div class="shortcut-num">2</div>
-        <div class="shortcut-text">
-          <strong>Add action: "Receive URL from Share Sheet"</strong><br/>
-          <span>Search for "Receive" → select <em>Receive Input from Share Sheet</em>. Set type to <strong>URLs</strong>.</span>
-        </div>
+        <div class="shortcut-text"><strong>Add "Receive Input from Share Sheet"</strong><br/><span>Set type to <strong>URLs</strong>.</span></div>
       </div>
       <div class="shortcut-step">
         <div class="shortcut-num">3</div>
         <div class="shortcut-text">
-          <strong>Add action: "Open URLs"</strong><br/>
-          <span>Search for "Open URLs". In the URL field, tap the variable icon and insert:</span>
-          <div class="code-block" id="shortcut-url-block" title="Tap to copy">https://trashthejay.github.io/llm-wiki/?url=</div>
-          <span>Then append the <em>Shortcut Input</em> variable after the <code>?url=</code></span>
+          <strong>Add "Open URLs" action</strong><br/>
+          <span>In the URL field paste:</span>
+          <div class="code-block" id="shortcut-url-block">https://trashthejay.github.io/llm-wiki/?url=</div>
+          <span>Then append the <em>Shortcut Input</em> variable.</span>
         </div>
       </div>
       <div class="shortcut-step">
         <div class="shortcut-num">4</div>
-        <div class="shortcut-text">
-          <strong>Name it "Send to Wiki" and tap Done</strong><br/>
-          <span>Now in Safari: Share → Send to Wiki. The URL auto-fills in the app!</span>
-        </div>
+        <div class="shortcut-text"><strong>Name it "Send to Wiki" → Done</strong><br/><span>Share any URL in Safari → Send to Wiki.</span></div>
       </div>
-
     </div>
   </div>
 </div>
@@ -740,28 +625,74 @@
 <!-- ── JAVASCRIPT ─────────────────────────────── -->
 <script>
 'use strict';
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
 document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
-// ─── SETTINGS ────────────────────────────────────────────────────────────────
+// ─── FIREBASE CONFIG STORE ────────────────────────────────────────────────────
+const FBConfig = {
+  get() { try { return JSON.parse(localStorage.getItem('wiki_fb') || 'null'); } catch { return null; } },
+  save(cfg) { localStorage.setItem('wiki_fb', JSON.stringify(cfg)); }
+};
+
+// ─── AUTH ─────────────────────────────────────────────────────────────────────
+let currentUser = null;
+let _auth = null;
+
+const Auth = {
+  async init() {
+    const cfg = FBConfig.get();
+    if (!cfg) { UI.showFirebaseSetup(); return; }
+    try {
+      firebase.initializeApp(cfg);
+      _auth = firebase.auth();
+      _auth.onAuthStateChanged(user => {
+        currentUser = user;
+        if (user) UI.showApp(user);
+        else UI.showSignIn();
+      });
+    } catch (e) {
+      UI.showToast('⚠️ Firebase config error — check your settings.');
+      UI.showFirebaseSetup();
+    }
+  },
+
+  async signIn() {
+    if (!_auth) return;
+    try {
+      const provider = new firebase.auth.GoogleAuthProvider();
+      await _auth.signInWithPopup(provider);
+    } catch (e) {
+      UI.showToast('⚠️ Sign-in failed: ' + (e.message || e.code));
+    }
+  },
+
+  async signOut() {
+    if (!_auth) return;
+    await _auth.signOut();
+    currentUser = null;
+  }
+};
+
+// ─── SETTINGS (per-user, keyed by Firebase UID) ───────────────────────────────
 const S = {
-  get notionToken()  { return localStorage.getItem('wiki_nt')  || ''; },
-  get geminiKey()    { return localStorage.getItem('wiki_gk')  || ''; },
-  get rootPageId()   { return localStorage.getItem('wiki_rp')  || ''; },
-  get logPageId()    { return localStorage.getItem('wiki_lp')  || ''; },
-  get language()     { return localStorage.getItem('wiki_lang') || 'auto'; }, // 'auto' | 'en' | 'ko'
-  setLogPageId(id)   { localStorage.setItem('wiki_lp', id); },
+  _p() { return currentUser ? 'wiki_' + currentUser.uid + '_' : 'wiki_guest_'; },
+  get notionToken()  { return localStorage.getItem(this._p() + 'nt')   || ''; },
+  get geminiKey()    { return localStorage.getItem(this._p() + 'gk')   || ''; },
+  get rootPageId()   { return localStorage.getItem(this._p() + 'rp')   || ''; },
+  get logPageId()    { return localStorage.getItem(this._p() + 'lp')   || ''; },
+  get language()     { return localStorage.getItem(this._p() + 'lang') || 'auto'; },
+  setLogPageId(id)   { localStorage.setItem(this._p() + 'lp', id); },
   save(nt, gk, rp, lang) {
-    if (rp !== this.rootPageId) localStorage.removeItem('wiki_lp'); // reset log cache
-    localStorage.setItem('wiki_nt', nt.trim());
-    localStorage.setItem('wiki_gk', gk.trim());
-    localStorage.setItem('wiki_rp', rp.trim().replace(/-/g,'').slice(-32));
-    localStorage.setItem('wiki_lang', lang || 'auto');
+    if (rp !== this.rootPageId) localStorage.removeItem(this._p() + 'lp');
+    localStorage.setItem(this._p() + 'nt',   nt.trim());
+    localStorage.setItem(this._p() + 'gk',   gk.trim());
+    localStorage.setItem(this._p() + 'rp',   rp.trim().replace(/-/g,'').slice(-32));
+    localStorage.setItem(this._p() + 'lang', lang || 'auto');
   },
   isConfigured() { return !!(this.notionToken && this.geminiKey && this.rootPageId); }
 };
 
-// ─── HELPERS ─────────────────────────────────────────────────────────────────
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 function htmlToText(html) {
@@ -799,11 +730,7 @@ const F = {
   async readImageFile(file) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = e => resolve({
-        base64: e.target.result.split(',')[1],
-        mimeType: file.type || 'image/png',
-        name: file.name
-      });
+      reader.onload = e => resolve({ base64: e.target.result.split(',')[1], mimeType: file.type || 'image/png', name: file.name });
       reader.onerror = () => reject(new Error('Could not read the image file.'));
       reader.readAsDataURL(file);
     });
@@ -813,43 +740,66 @@ const F = {
 // ─── GEMINI CLIENT ────────────────────────────────────────────────────────────
 const G = {
   MODEL: 'gemini-2.5-flash',
-  BASE: 'https://generativelanguage.googleapis.com/v1beta/models/',
+  BASE:  'https://generativelanguage.googleapis.com/v1beta/models/',
 
   LANG_INSTRUCTIONS: {
-    auto: 'Detect the language of the source content and write "summary" and "keyPoints" in that same language. Write "topicTitle", "category", and "subcategory" in English regardless (used for page titles).',
-    en:   'Write "summary" and "keyPoints" in English. Write "topicTitle", "category", and "subcategory" in English.',
-    ko:   '"summary"와 "keyPoints"는 반드시 한국어로 작성하세요. "topicTitle", "category", "subcategory"는 영어로 작성하세요 (페이지 제목으로 사용됩니다).',
+    auto: 'Detect the language of the source and write "summary" and "keyPoints" in that same language. Write "topicTitle", "category", "subcategory", and "sourceTitle" in English.',
+    en:   'Write ALL fields in English.',
+    ko:   '"summary"와 "keyPoints"는 반드시 한국어로 작성하세요. "topicTitle", "category", "subcategory", "sourceTitle"는 영어로 작성하세요.',
   },
 
-  buildPrompt() {
+  buildPrompt(existingCats) {
     const langNote = this.LANG_INSTRUCTIONS[S.language] || this.LANG_INSTRUCTIONS.auto;
-    return `You are a personal knowledge wiki assistant. Analyze the provided content and return a JSON object for a personal wiki system.
+
+    let catSection = '';
+    if (existingCats && existingCats.length) {
+      catSection = '\n\nCurrent wiki structure:\n' +
+        existingCats.map(c =>
+          `- ${c.name} (${c.topics.length} pages${c.topics.length ? ': ' + c.topics.slice(0,6).join(', ') : ''})`
+        ).join('\n') +
+        '\n\nCategory guidance:\n' +
+        '• If the content fits an EXISTING category → set categoryStatus: "existing"\n' +
+        '• If it\'s genuinely new territory → set categoryStatus: "new"\n' +
+        '• If an existing category has grown broad (4+ topics) AND this content makes a better grouping obvious → set categoryStatus: "evolved" (suggest sparingly — only when clearly beneficial)\n' +
+        '• For "evolved": suggest a new category name in "category" field and explain why in "evolutionSuggestion"';
+    } else {
+      catSection = '\n\nThis wiki has no existing categories yet. Set categoryStatus: "new".';
+    }
+
+    return `You are a personal knowledge wiki assistant. Analyze the provided content and return a JSON object.
 
 LANGUAGE RULE: ${langNote}
+${catSection}
 
 Return a JSON object with EXACTLY these fields:
 {
   "topicTitle": "2-4 word topic name (English)",
-  "category": "1-2 word primary category in English (Travel / Tech / Health / Finance / Food / Work / Personal / Science / Culture)",
-  "subcategory": "1-3 word specific sub-category in English — this becomes the wiki PAGE TITLE (e.g., Mexico City, LLM Tools, Marathon Training)",
-  "summary": "2-3 paragraph synthesis of the core knowledge and insights. Write as if explaining to yourself for future reference. Be specific.",
-  "keyPoints": ["5-8 specific, actionable facts or insights as an array of strings. Each should stand alone as a useful fact."],
-  "sourceTitle": "the title or best description of the source"
+  "category": "1-2 word primary category (English) — Travel / Tech / Health / Finance / Food / Work / Personal / Science / Culture / or suggest a new one",
+  "subcategory": "1-3 word page title (English) — this becomes the Notion page name",
+  "summary": "2-3 paragraph synthesis of core knowledge. Write for your future self.",
+  "keyPoints": ["5-8 specific facts or insights as string array"],
+  "sourceTitle": "title or description of the source (English)",
+  "categoryStatus": "existing" or "new" or "evolved",
+  "evolutionSuggestion": null or {
+    "currentCategory": "the existing category this evolved from",
+    "suggestedCategory": "the proposed new category name",
+    "affectedTopics": ["topic1", "topic2"],
+    "reason": "one sentence explaining the benefit of this reorganization"
+  }
 }
 
-Return ONLY valid JSON. No markdown, no code blocks, no explanation.`;
+Return ONLY valid JSON. No markdown, no code fences, no explanation.`;
   },
 
   async analyze(parts) {
     const url = this.BASE + this.MODEL + ':generateContent?key=' + S.geminiKey;
-    const body = {
-      contents: [{ parts }],
-      generationConfig: { responseMimeType: 'application/json', temperature: 0.3 }
-    };
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+      body: JSON.stringify({
+        contents: [{ parts }],
+        generationConfig: { responseMimeType: 'application/json', temperature: 0.3 }
+      })
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -862,21 +812,20 @@ Return ONLY valid JSON. No markdown, no code blocks, no explanation.`;
     catch { throw new Error('Gemini returned invalid JSON. Try again.'); }
   },
 
-  buildUrlParts(text) {
-    return [{ text: this.buildPrompt() + '\n\nContent to analyze:\n---\n' + text + '\n---' }];
+  buildUrlParts(text, cats) {
+    return [{ text: this.buildPrompt(cats) + '\n\nContent to analyze:\n---\n' + text + '\n---' }];
   },
 
-  buildImageParts(base64, mimeType) {
+  buildImageParts(base64, mimeType, cats) {
     return [
       { inline_data: { mime_type: mimeType, data: base64 } },
-      { text: this.buildPrompt() + '\n\nAnalyze the content shown in this screenshot/image.' }
+      { text: this.buildPrompt(cats) + '\n\nAnalyze the content shown in this screenshot/image.' }
     ];
   }
 };
 
 // ─── NOTION CLIENT ────────────────────────────────────────────────────────────
 const N = {
-  // Fallback chain — tries each proxy in order until one works
   PROXIES: [
     url => 'https://corsproxy.io/?url=' + encodeURIComponent(url),
     url => 'https://proxy.cors.sh/' + url,
@@ -904,8 +853,7 @@ const N = {
         const res = await fetch(makeUrl(target), opts);
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
-          // 401/403 = bad token, no point retrying other proxies
-          if (res.status === 401) throw new Error('Notion: Invalid token. Check your API key in Settings.');
+          if (res.status === 401) throw new Error('Notion: Invalid token. Re-check your API key in Settings.');
           if (res.status === 403) throw new Error('Notion: Access denied. Make sure the page is shared with your integration.');
           if (res.status === 404) throw new Error('Notion: Page not found. Check your Root Page ID in Settings.');
           throw new Error('Notion error ' + res.status + ': ' + (err.message || 'unknown'));
@@ -913,23 +861,20 @@ const N = {
         if (res.status === 204) return null;
         return res.json();
       } catch (e) {
-        // Re-throw Notion API errors immediately (no point trying other proxies)
         if (e.message.startsWith('Notion:') || e.message.startsWith('Notion error')) throw e;
-        lastErr = e; // network/CORS error — try next proxy
+        lastErr = e;
       }
     }
-    throw new Error('Could not reach Notion after trying 3 proxies. Check your internet connection and try again.');
+    throw new Error('Could not reach Notion after 3 proxies. Check your internet connection.');
   },
 
-  // Get child pages of a Notion page
   async childPages(pageId) {
     const data = await this.req('GET', '/blocks/' + pageId + '/children?page_size=100');
     return (data?.results || [])
       .filter(b => b.type === 'child_page')
-      .map(b => ({ id: b.id.replace(/-/g,''), rawId: b.id, title: b.child_page?.title || '' }));
+      .map(b => ({ rawId: b.id, title: b.child_page?.title || '' }));
   },
 
-  // Get all blocks of a page (with pagination)
   async pageBlocks(pageId) {
     let blocks = [], cursor = null;
     do {
@@ -941,59 +886,45 @@ const N = {
     return blocks;
   },
 
-  // Delete all blocks (sequential with rate-limit delay)
   async clearBlocks(pageId) {
     const blocks = await this.pageBlocks(pageId);
-    for (const b of blocks) {
-      await this.req('DELETE', '/blocks/' + b.id);
-      await sleep(350);
-    }
+    for (const b of blocks) { await this.req('DELETE', '/blocks/' + b.id); await sleep(350); }
   },
 
-  // Append block children to a page
   async appendBlocks(pageId, blocks) {
-    // Notion max 100 per call
-    for (let i = 0; i < blocks.length; i += 100) {
-      await this.req('PATCH', '/blocks/' + pageId + '/children', {
-        children: blocks.slice(i, i + 100)
-      });
-    }
+    for (let i = 0; i < blocks.length; i += 100)
+      await this.req('PATCH', '/blocks/' + pageId + '/children', { children: blocks.slice(i, i + 100) });
   },
 
-  // Create a plain page under a parent
   async createPage(parentId, title) {
     const data = await this.req('POST', '/pages', {
       parent: { page_id: parentId },
       properties: { title: { title: [{ type: 'text', text: { content: title } }] } }
     });
-    return data.id.replace(/-/g,'');
+    return data.id;
   },
 
-  // Create a page with initial blocks
   async createPageWithBlocks(parentId, title, blocks) {
     const data = await this.req('POST', '/pages', {
       parent: { page_id: parentId },
       properties: { title: { title: [{ type: 'text', text: { content: title } }] } },
       children: blocks.slice(0, 100)
     });
-    return data.id.replace(/-/g,'');
+    return data.id;
   },
 
-  // Find or create the _log page under root
   async ensureLogPage() {
     if (S.logPageId) return S.logPageId;
     const pages = await this.childPages(S.rootPageId);
     const log = pages.find(p => p.title === '_log');
     if (log) { S.setLogPageId(log.rawId); return log.rawId; }
-    const newId = await this.createPage(S.rootPageId, '_log');
-    S.setLogPageId(newId);
-    return newId;
+    const id = await this.createPage(S.rootPageId, '_log');
+    S.setLogPageId(id); return id;
   },
 
-  // Append an entry to the log page
   async appendLog(entry) {
     const logId = await this.ensureLogPage();
-    const line = '[' + entry.date + '] ' + (entry.action === 'created' ? '✨ created' : '✏️ updated')
+    const line = '[' + entry.date + '] ' + (entry.action === 'created' ? '✨' : '✏️')
       + ' | ' + entry.category + ' › ' + entry.subcategory + ' (v' + entry.version + ')'
       + (entry.sourceTitle ? ' — ' + entry.sourceTitle : '');
     await this.appendBlocks(logId, [{
@@ -1006,27 +937,20 @@ const N = {
 // ─── BLOCK BUILDER ────────────────────────────────────────────────────────────
 function buildWikiBlocks(analysis, version, date, sources, archived) {
   const blk = [];
-  const p = (content) => ({ object:'block', type:'paragraph',
-    paragraph:{ rich_text:[{ type:'text', text:{ content: String(content).slice(0,1999) } }] } });
-  const h2 = (content) => ({ object:'block', type:'heading_2',
-    heading_2:{ rich_text:[{ type:'text', text:{ content } }], is_toggleable:false } });
-  const bullet = (content) => ({ object:'block', type:'bulleted_list_item',
-    bulleted_list_item:{ rich_text:[{ type:'text', text:{ content: String(content).slice(0,1999) } }] } });
+  const p  = t => ({ object:'block', type:'paragraph',       paragraph:{ rich_text:[{ type:'text', text:{ content:String(t).slice(0,1999) } }] } });
+  const h2 = t => ({ object:'block', type:'heading_2',       heading_2:{ rich_text:[{ type:'text', text:{ content:t } }], is_toggleable:false } });
+  const li = t => ({ object:'block', type:'bulleted_list_item', bulleted_list_item:{ rich_text:[{ type:'text', text:{ content:String(t).slice(0,1999) } }] } });
 
-  // Version badge callout
   blk.push({ object:'block', type:'callout',
-    callout:{ rich_text:[{ type:'text', text:{ content: 'v' + version + '  ·  ' + date } }],
+    callout:{ rich_text:[{ type:'text', text:{ content:'v' + version + '  ·  ' + date } }],
       icon:{ type:'emoji', emoji:'📌' }, color:'blue_background' } });
 
-  // Summary
   blk.push(h2('Summary'));
   (analysis.summary || '').split('\n\n').filter(s => s.trim()).forEach(s => blk.push(p(s.trim())));
 
-  // Key Points
   blk.push(h2('Key Points'));
-  (analysis.keyPoints || []).forEach(pt => blk.push(bullet(pt)));
+  (analysis.keyPoints || []).forEach(pt => blk.push(li(pt)));
 
-  // Sources
   blk.push(h2('Sources Ingested'));
   sources.forEach(src => {
     if (src.url) {
@@ -1035,99 +959,95 @@ function buildWikiBlocks(analysis, version, date, sources, archived) {
           { type:'text', text:{ content:'[' + src.date + '] ' } },
           { type:'text', text:{ content: src.title.slice(0,200), link:{ url: src.url } } }
         ]} });
-    } else {
-      blk.push(bullet('[' + src.date + '] ' + src.title));
-    }
+    } else blk.push(li('[' + src.date + '] ' + src.title));
   });
 
-  // Outdated section (archive from previous version)
   if (archived) {
     blk.push({ object:'block', type:'divider', divider:{} });
     blk.push({ object:'block', type:'callout',
       callout:{ rich_text:[{ type:'text', text:{
-        content: '⚠️ Outdated — originally v' + archived.version + ' (' + archived.date + '). Superseded by v' + version + '.'
+        content:'⚠️ Outdated — originally v' + archived.version + ' (' + archived.date + '). Superseded by v' + version + '.'
       }}], icon:{ type:'emoji', emoji:'⚠️' }, color:'orange_background' } });
     archived.summaryParagraphs.forEach(s => blk.push(p(s)));
-    archived.keyPoints.forEach(pt => blk.push(bullet(pt)));
+    archived.keyPoints.forEach(pt => blk.push(li(pt)));
   }
-
   return blk;
 }
 
 function extractPageContent(blocks) {
   let version = '1.0', date = '', summaryParagraphs = [], keyPoints = [], sources = [];
   let inSummary = false, inKeys = false, inSources = false;
-
   for (const b of blocks) {
     const text = getRichText(b);
     if (b.type === 'callout') {
-      if (text.startsWith('⚠️')) break; // stop at outdated section
+      if (text.startsWith('⚠️')) break;
       const vm = text.match(/v(\d+\.\d+)/); if (vm) version = vm[1];
       const dm = text.match(/(\d{4}-\d{2}-\d{2})/); if (dm) date = dm[1];
       inSummary = inKeys = inSources = false;
     } else if (b.type === 'heading_2') {
       const t = text.toLowerCase();
-      inSummary = t === 'summary';
-      inKeys    = t === 'key points';
-      inSources = t === 'sources ingested';
-    } else if (b.type === 'paragraph' && inSummary && text) {
-      summaryParagraphs.push(text);
-    } else if (b.type === 'bulleted_list_item' && inKeys && text) {
-      keyPoints.push(text);
-    } else if (b.type === 'bulleted_list_item' && inSources && text) {
-      sources.push(text);
-    }
+      inSummary = t === 'summary'; inKeys = t === 'key points'; inSources = t === 'sources ingested';
+    } else if (b.type === 'paragraph'         && inSummary  && text) summaryParagraphs.push(text);
+    else if (b.type === 'bulleted_list_item'  && inKeys     && text) keyPoints.push(text);
+    else if (b.type === 'bulleted_list_item'  && inSources  && text) sources.push(text);
   }
   return { version, date, summaryParagraphs, keyPoints, sources };
 }
 
 // ─── WIKI ENGINE ──────────────────────────────────────────────────────────────
 const W = {
-  _state: null, // pending analysis result
+  _state: null,
 
   async analyze(source, type) {
-    UI.showProgress(['Fetching content', 'Analyzing with Gemini', 'Checking existing pages']);
-
-    let parts, sourceUrl = '', sourceTitle = '';
+    UI.showProgress(['Fetching content', 'Loading wiki structure', 'AI analysis']);
+    let contentText = '', sourceUrl = '', sourceTitle = '';
+    let existingCats = []; // [{ name, rawId, topics: [{ title, rawId }] }]
 
     try {
-      UI.setStep(0, 'active');
+      // Step 1 — fetch content
+      UI.setStep(0, 'active'); UI.setLabel('Fetching content…');
       if (type === 'url') {
-        UI.setLabel('Fetching page content…');
         let fetched;
         try { fetched = await F.fetchUrl(source); }
-        catch (e) { throw new Error('Step 1 – Fetch failed: ' + e.message); }
-        sourceUrl = fetched.url;
-        parts = G.buildUrlParts(fetched.text);
-      } else {
-        UI.setLabel('Reading image…');
-        parts = G.buildImageParts(source.base64, source.mimeType);
+        catch (e) { throw new Error('Step 1 – ' + e.message); }
+        contentText = fetched.text; sourceUrl = fetched.url;
       }
-
       UI.setStep(0, 'done');
-      UI.setStep(1, 'active');
-      UI.setLabel('Analyzing with Gemini Flash…');
+
+      // Step 2 — load Notion wiki structure (gives Gemini context for category suggestions)
+      UI.setStep(1, 'active'); UI.setLabel('Loading wiki structure…');
+      try {
+        const cats = await N.childPages(S.rootPageId);
+        for (const cat of cats.filter(c => !c.title.startsWith('_'))) {
+          const topics = await N.childPages(cat.rawId);
+          existingCats.push({ name: cat.title, rawId: cat.rawId, topics });
+        }
+      } catch (e) { throw new Error('Step 2 – Notion: ' + e.message); }
+      UI.setStep(1, 'done');
+
+      // Step 3 — Gemini analysis with full category context
+      UI.setStep(2, 'active'); UI.setLabel('Analyzing with Gemini Flash…');
+      const parts = type === 'url'
+        ? G.buildUrlParts(contentText, existingCats)
+        : G.buildImageParts(source.base64, source.mimeType, existingCats);
 
       let analysis;
       try { analysis = await G.analyze(parts); }
-      catch (e) { throw new Error('Step 2 – Gemini failed: ' + e.message); }
+      catch (e) { throw new Error('Step 3 – ' + e.message); }
       sourceTitle = analysis.sourceTitle || (type === 'url' ? new URL(sourceUrl).hostname : 'Screenshot');
+      UI.setStep(2, 'done');
 
-      UI.setStep(1, 'done');
-      UI.setStep(2, 'active');
-      UI.setLabel('Checking existing wiki pages…');
+      // Match existing Notion pages based on Gemini's suggestion
+      const effectiveCat = analysis.categoryStatus === 'evolved' && analysis.evolutionSuggestion
+        ? analysis.category  // new suggested category name
+        : analysis.category;
+      const catMatch = existingCats.find(c => c.name.toLowerCase() === effectiveCat.toLowerCase());
 
-      // Look up categories + topics in Notion
-      let categories;
-      try { categories = await N.childPages(S.rootPageId); }
-      catch (e) { throw new Error('Step 3 – Notion failed: ' + e.message); }
-      const catMatch = categories.find(c => c.title.toLowerCase() === analysis.category.toLowerCase());
-
-      let existingTopic = null, newVersion = '1.0', existingCategoryId = catMatch?.rawId || null;
+      let existingTopic = null, newVersion = '1.0';
+      const existingCategoryId = catMatch?.rawId || null;
 
       if (catMatch) {
-        const topics = await N.childPages(catMatch.rawId);
-        const topicMatch = topics.find(t => t.title.toLowerCase() === analysis.subcategory.toLowerCase());
+        const topicMatch = catMatch.topics.find(t => t.title.toLowerCase() === analysis.subcategory.toLowerCase());
         if (topicMatch) {
           const blocks = await N.pageBlocks(topicMatch.rawId);
           const content = extractPageContent(blocks);
@@ -1136,10 +1056,12 @@ const W = {
         }
       }
 
-      UI.setStep(2, 'done');
-
-      this._state = { analysis, sourceUrl, sourceTitle, existingCategoryId,
-        existingTopic, newVersion, isNew: !existingTopic, date: today(), type };
+      this._state = {
+        analysis, sourceUrl, sourceTitle, existingCats,
+        existingCategoryId, existingTopic, newVersion,
+        isNew: !existingTopic, date: today(), type,
+        useEvolution: true  // default: accept AI evolution suggestion if present
+      };
 
       UI.showPreview(this._state);
 
@@ -1149,30 +1071,55 @@ const W = {
     }
   },
 
+  toggleEvolution(use) {
+    if (!this._state) return;
+    this._state.useEvolution = use;
+    // Recompute whether topic exists under the effective category
+    const a = this._state.analysis;
+    const effectiveCat = (a.categoryStatus === 'evolved' && !use && a.evolutionSuggestion)
+      ? a.evolutionSuggestion.currentCategory
+      : a.category;
+    const catMatch = this._state.existingCats.find(c => c.name.toLowerCase() === effectiveCat.toLowerCase());
+    this._state.existingCategoryId = catMatch?.rawId || null;
+    if (catMatch) {
+      const topicMatch = catMatch.topics.find(t => t.title.toLowerCase() === a.subcategory.toLowerCase());
+      this._state.existingTopic = topicMatch || null;
+      this._state.isNew = !topicMatch;
+    } else {
+      this._state.existingTopic = null; this._state.isNew = true;
+    }
+    this._state.newVersion = this._state.existingTopic ? nextVersion(this._state.existingTopic.content?.version || '1.0') : '1.0';
+    UI.refreshPreviewPath(this._state);
+  },
+
   updateCategory(cat, sub) {
     if (!this._state) return;
     this._state.analysis.category = cat;
     this._state.analysis.subcategory = sub;
+    this._state.analysis.categoryStatus = 'new';
+    this._state.analysis.evolutionSuggestion = null;
     this._state.existingCategoryId = null;
     this._state.existingTopic = null;
-    this._state.isNew = true;
-    this._state.newVersion = '1.0';
+    this._state.isNew = true; this._state.newVersion = '1.0';
     UI.refreshPreviewPath(this._state);
   },
 
   async commit() {
     const p = this._state;
     if (!p) return;
+    const a = p.analysis;
+
+    // Resolve effective category based on evolution choice
+    const effectiveCat = (a.categoryStatus === 'evolved' && !p.useEvolution && a.evolutionSuggestion)
+      ? a.evolutionSuggestion.currentCategory
+      : a.category;
 
     UI.showProgress(['Updating Notion', 'Logging ingestion', 'Complete']);
-    UI.setStep(0, 'active');
-    UI.setLabel('Writing to Notion…');
+    UI.setStep(0, 'active'); UI.setLabel('Writing to Notion…');
 
     try {
-      // Build sources list
       const sources = [];
       if (p.existingTopic?.content?.sources) {
-        // Re-parse previously saved sources (best effort — URL links may be lost)
         for (const s of p.existingTopic.content.sources) {
           const dateM = s.match(/^\[(\d{4}-\d{2}-\d{2})\]/);
           const title = s.replace(/^\[.*?\]\s*/, '').replace(/\s*—\s*https?:\/\/.*$/, '');
@@ -1182,58 +1129,39 @@ const W = {
       sources.unshift({ date: p.date, title: p.sourceTitle.slice(0,200), url: p.sourceUrl });
 
       let topicPageId;
-
       if (p.isNew) {
-        // Get or create category page
         let catId = p.existingCategoryId;
-        if (!catId) catId = await N.createPage(S.rootPageId, p.analysis.category);
-        // Create topic page with initial blocks
-        const blocks = buildWikiBlocks(p.analysis, p.newVersion, p.date, sources, null);
-        topicPageId = await N.createPageWithBlocks(catId, p.analysis.subcategory, blocks);
+        if (!catId) catId = await N.createPage(S.rootPageId, effectiveCat);
+        const blocks = buildWikiBlocks(a, p.newVersion, p.date, sources, null);
+        topicPageId = await N.createPageWithBlocks(catId, a.subcategory, blocks);
       } else {
-        // Archive existing content then update
         const archived = {
-          version: p.existingTopic.content.version,
-          date:    p.existingTopic.content.date,
+          version: p.existingTopic.content.version, date: p.existingTopic.content.date,
           summaryParagraphs: p.existingTopic.content.summaryParagraphs,
-          keyPoints:         p.existingTopic.content.keyPoints
+          keyPoints: p.existingTopic.content.keyPoints
         };
         UI.setLabel('Clearing old content…');
         await N.clearBlocks(p.existingTopic.rawId);
         UI.setLabel('Writing new content…');
-        const blocks = buildWikiBlocks(p.analysis, p.newVersion, p.date, sources, archived);
+        const blocks = buildWikiBlocks(a, p.newVersion, p.date, sources, archived);
         await N.appendBlocks(p.existingTopic.rawId, blocks);
         topicPageId = p.existingTopic.rawId;
       }
 
-      UI.setStep(0, 'done');
-      UI.setStep(1, 'active');
-      UI.setLabel('Logging ingestion…');
+      UI.setStep(0, 'done'); UI.setStep(1, 'active'); UI.setLabel('Logging ingestion…');
+      await N.appendLog({ date: p.date, action: p.isNew ? 'created' : 'updated',
+        category: effectiveCat, subcategory: a.subcategory, version: p.newVersion,
+        sourceTitle: p.sourceTitle, sourceUrl: p.sourceUrl });
 
-      await N.appendLog({
-        date: p.date, action: p.isNew ? 'created' : 'updated',
-        category: p.analysis.category, subcategory: p.analysis.subcategory,
-        version: p.newVersion, sourceTitle: p.sourceTitle, sourceUrl: p.sourceUrl
-      });
+      UI.setStep(1, 'done'); UI.setStep(2, 'done'); UI.setLabel('Done!');
 
-      UI.setStep(1, 'done');
-      UI.setStep(2, 'done');
-      UI.setLabel('Done!');
-
-      // Record in session activity
-      SESSION_LOG.unshift({
-        date: p.date, action: p.isNew ? 'created' : 'updated',
-        category: p.analysis.category, subcategory: p.analysis.subcategory,
-        version: p.newVersion
-      });
-
+      SESSION_LOG.unshift({ date: p.date, action: p.isNew ? 'created' : 'updated',
+        category: effectiveCat, subcategory: a.subcategory, version: p.newVersion });
       this._state = null;
 
       setTimeout(() => {
-        UI.hideProgress();
-        UI.hidePreview();
-        UI.refreshActivity();
-        UI.showToast('✓ ' + p.analysis.category + ' › ' + p.analysis.subcategory + ' saved to Notion');
+        UI.hideProgress(); UI.hidePreview(); UI.refreshActivity();
+        UI.showToast('✓ ' + effectiveCat + ' › ' + a.subcategory + ' saved to Notion');
         UI.resetInputs();
       }, 800);
 
@@ -1244,27 +1172,77 @@ const W = {
   }
 };
 
-// ─── SESSION LOG ─────────────────────────────────────────────────────────────
 const SESSION_LOG = [];
 
 // ─── UI ───────────────────────────────────────────────────────────────────────
 const UI = {
-  $ : id => document.getElementById(id),
+  $: id => document.getElementById(id),
+
+  // ── AUTH VIEWS ──
+  showFirebaseSetup() {
+    this.$('auth-overlay').classList.remove('hidden');
+    this.$('google-signin-btn').style.display = 'none';
+    this.$('auth-divider') && (this.$('auth-divider').style.display = 'none');
+    this.$('firebase-fields').classList.add('open');
+    this.$('fb-toggle').style.display = 'none';
+  },
+
+  showSignIn() {
+    this.$('auth-overlay').classList.remove('hidden');
+    this.$('google-signin-btn').style.display = '';
+    const d = this.$('auth-divider'); if (d) d.style.display = '';
+  },
+
+  showApp(user) {
+    this.$('auth-overlay').classList.add('hidden');
+    this.$('user-pill').style.display = '';
+    const avatar = this.$('user-avatar');
+    if (user.photoURL) avatar.src = user.photoURL;
+    this.$('user-name').textContent = (user.displayName || user.email || '').split(' ')[0];
+    this.refreshSetupBanner();
+    this.refreshActivity();
+    // Update settings signout row
+    const row = this.$('signout-row');
+    if (row) {
+      row.style.display = '';
+      this.$('settings-avatar').src = user.photoURL || '';
+      const who = this.$('settings-who');
+      who.innerHTML = (user.displayName || '') + '<span>' + (user.email || '') + '</span>';
+    }
+  },
+
+  // ── SETUP BANNER ──
+  refreshSetupBanner() {
+    this.$('setup-banner').style.display = S.isConfigured() ? 'none' : '';
+  },
 
   init() {
+    this.bindAuth();
     this.bindHeader();
     this.bindTabs();
     this.bindInputs();
     this.bindPreview();
     this.bindSettings();
-    this.refreshSetupBanner();
-    this.refreshActivity();
     this.handleUrlParam();
+    Auth.init();
   },
 
-  // Setup banner
-  refreshSetupBanner() {
-    this.$('setup-banner').style.display = S.isConfigured() ? 'none' : '';
+  // ── AUTH BINDINGS ──
+  bindAuth() {
+    this.$('google-signin-btn').onclick = () => Auth.signIn();
+    this.$('fb-toggle').onclick = () => this.$('firebase-fields').classList.toggle('open');
+    this.$('fb-save-btn').onclick = () => {
+      const apiKey     = this.$('fb-api-key').value.trim();
+      const authDomain = this.$('fb-auth-domain').value.trim();
+      const projectId  = this.$('fb-project-id').value.trim();
+      const appId      = this.$('fb-app-id').value.trim();
+      if (!apiKey || !authDomain || !projectId || !appId) {
+        this.showToast('⚠️ All four Firebase fields are required.'); return;
+      }
+      FBConfig.save({ apiKey, authDomain, projectId, appId });
+      location.reload(); // reinitialize Firebase with new config
+    };
+    this.$('user-pill').onclick = () => this.openSettings();
   },
 
   // ── HEADER ──
@@ -1279,7 +1257,6 @@ const UI = {
       tab.onclick = () => this.setTab(tab.dataset.tab);
     });
   },
-
   setTab(name) {
     document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
@@ -1287,19 +1264,12 @@ const UI = {
 
   // ── INPUTS ──
   bindInputs() {
-    const btn = this.$('process-btn');
-    const inp = this.$('url-input');
+    this.$('process-btn').onclick = () => this.processUrl();
+    this.$('url-input').addEventListener('keydown', e => { if (e.key === 'Enter') this.processUrl(); });
 
-    btn.onclick = () => this.processUrl();
-    inp.addEventListener('keydown', e => { if (e.key === 'Enter') this.processUrl(); });
-
-    // Screenshot
-    const dz  = this.$('drop-zone');
-    const fi  = this.$('file-input');
-
+    const dz = this.$('drop-zone'), fi = this.$('file-input');
     dz.onclick = () => fi.click();
     fi.onchange = e => { if (e.target.files[0]) this.processImage(e.target.files[0]); };
-
     dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
     dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
     dz.addEventListener('drop', e => {
@@ -1313,7 +1283,7 @@ const UI = {
     const url = this.$('url-input').value.trim();
     if (!url) return;
     if (!S.isConfigured()) { this.openSettings(); return; }
-    if (!url.startsWith('http')) { this.showError('Please enter a valid URL starting with http:// or https://'); return; }
+    if (!url.startsWith('http')) { this.showError('Please enter a valid URL starting with http://'); return; }
     this.hidePreview();
     await W.analyze(url, 'url');
   },
@@ -1322,21 +1292,14 @@ const UI = {
     if (!S.isConfigured()) { this.openSettings(); return; }
     this.hidePreview();
     try {
-      this.showProgress(['Reading image', 'Analyzing with Gemini', 'Checking existing pages']);
-      this.setStep(0, 'active');
-      this.setLabel('Reading image…');
+      this.showProgress(['Reading image', 'Loading wiki structure', 'AI analysis']);
+      this.setStep(0, 'active'); this.setLabel('Reading image…');
       const img = await F.readImageFile(file);
       this.setStep(0, 'done');
-
-      // Show preview in drop zone
       const dz = this.$('drop-zone');
       dz.innerHTML = '<img class="preview-img" src="data:' + img.mimeType + ';base64,' + img.base64 + '" /><p>' + file.name + '</p>';
-
       await W.analyze(img, 'image');
-    } catch (e) {
-      this.hideProgress();
-      this.showError(e.message);
-    }
+    } catch (e) { this.hideProgress(); this.showError(e.message); }
   },
 
   resetInputs() {
@@ -1348,23 +1311,15 @@ const UI = {
   // ── PROGRESS ──
   showProgress(stepLabels) {
     const el = this.$('progress');
-    const stepsEl = this.$('progress-steps');
     el.classList.add('visible');
-    stepsEl.innerHTML = stepLabels.map((l, i) =>
-      `<div class="step" data-n="${i+1}" id="step-${i}">${l}</div>`
-    ).join('');
+    this.$('progress-steps').innerHTML = stepLabels.map((l, i) =>
+      `<div class="step" data-n="${i+1}" id="step-${i}">${l}</div>`).join('');
   },
-
-  setStep(idx, state) { // state: 'active' | 'done'
+  setStep(idx, state) {
     const el = document.getElementById('step-' + idx);
-    if (!el) return;
-    el.className = 'step ' + state;
+    if (el) el.className = 'step ' + state;
   },
-
-  setLabel(text) {
-    this.$('progress-label').innerHTML = '<span class="spinner"></span>' + text;
-  },
-
+  setLabel(text) { this.$('progress-label').innerHTML = '<span class="spinner"></span>' + text; },
   hideProgress() {
     this.$('progress').classList.remove('visible');
     this.$('progress-steps').innerHTML = '';
@@ -1374,64 +1329,92 @@ const UI = {
   // ── PREVIEW ──
   bindPreview() {
     this.$('confirm-btn').onclick = () => W.commit();
-
+    this.$('cancel-btn').onclick  = () => { W._state = null; this.hidePreview(); };
     this.$('edit-cat-btn').onclick = () => {
-      const editEl = this.$('cat-edit');
-      const visible = editEl.classList.contains('visible');
-      editEl.classList.toggle('visible', !visible);
-      if (!visible && W._state) {
+      const e = this.$('cat-edit');
+      e.classList.toggle('visible');
+      if (e.classList.contains('visible') && W._state) {
         this.$('cat-input').value = W._state.analysis.category;
         this.$('sub-input').value = W._state.analysis.subcategory;
       }
     };
-
     this.$('apply-cat-btn').onclick = () => {
-      const cat = this.$('cat-input').value.trim();
-      const sub = this.$('sub-input').value.trim();
+      const cat = this.$('cat-input').value.trim(), sub = this.$('sub-input').value.trim();
       if (!cat || !sub) return;
       W.updateCategory(cat, sub);
       this.$('cat-edit').classList.remove('visible');
     };
+    this.$('evo-use-btn').onclick  = () => { W.toggleEvolution(true);  this.updateEvoButtons(true); };
+    this.$('evo-keep-btn').onclick = () => { W.toggleEvolution(false); this.updateEvoButtons(false); };
+  },
 
-    this.$('cancel-btn').onclick = () => {
-      W._state = null;
-      this.hidePreview();
-    };
+  updateEvoButtons(useAI) {
+    this.$('evo-use-btn').classList.toggle('selected', useAI);
+    this.$('evo-keep-btn').classList.toggle('selected', !useAI);
   },
 
   showPreview(state) {
     this.hideProgress();
-    const el = this.$('preview');
-    el.classList.add('visible');
+    this.$('preview').classList.add('visible');
     this.refreshPreviewPath(state);
     this.$('preview-summary').textContent = (state.analysis.summary || '').slice(0, 300);
+
+    // Evolution panel
+    const evo = state.analysis.evolutionSuggestion;
+    const evoPanel = this.$('evolution-panel');
+    if (state.analysis.categoryStatus === 'evolved' && evo) {
+      this.$('evolution-reason').textContent =
+        `Moving "${evo.affectedTopics?.join('", "') || state.analysis.subcategory}" from ${evo.currentCategory} → ${evo.suggestedCategory}. ${evo.reason}`;
+      evoPanel.classList.add('visible');
+      this.updateEvoButtons(true);
+    } else {
+      evoPanel.classList.remove('visible');
+    }
   },
 
   refreshPreviewPath(state) {
-    const path = this.$('preview-path');
-    const actionClass = state.isNew ? 'new' : 'update';
-    const actionText  = state.isNew
-      ? '✨ New page v' + state.newVersion
-      : '✏️ Update → v' + state.newVersion;
-    path.innerHTML =
-      '<span class="cat-badge">' + state.analysis.category + '</span>' +
+    const a = state.analysis;
+    const useEvo = state.useEvolution;
+    const evo = a.evolutionSuggestion;
+
+    // Effective category shown
+    const displayCat = (a.categoryStatus === 'evolved' && !useEvo && evo)
+      ? evo.currentCategory : a.category;
+
+    // Status badge (the key visual distinction)
+    let badge = '';
+    if (a.categoryStatus === 'evolved') {
+      badge = useEvo
+        ? '<span class="status-badge badge-evolved">🤖 AI suggestion</span>'
+        : '<span class="status-badge badge-existing-cat">↩ Keeping existing</span>';
+    } else if (!state.isNew && a.categoryStatus === 'existing') {
+      badge = '<span class="status-badge badge-existing-page">✓ Existing page</span>';
+    } else if (!state.existingCategoryId) {
+      badge = '<span class="status-badge badge-new">✨ New</span>';
+    } else {
+      badge = '<span class="status-badge badge-existing-cat">+ New page</span>';
+    }
+
+    const updateBadge = !state.isNew
+      ? '<span class="action-badge update">→ v' + state.newVersion + '</span>' : '';
+
+    document.getElementById('preview-path').innerHTML =
+      '<span class="cat-badge">' + displayCat + '</span>' +
       '<span class="cat-sep">›</span>' +
-      '<span class="cat-badge">' + state.analysis.subcategory + '</span>' +
-      '<span class="action-badge ' + actionClass + '">' + actionText + '</span>';
+      '<span class="cat-badge">' + a.subcategory + '</span>' +
+      badge + updateBadge;
   },
 
   hidePreview() {
     this.$('preview').classList.remove('visible');
     this.$('cat-edit').classList.remove('visible');
+    this.$('evolution-panel').classList.remove('visible');
   },
 
   // ── ACTIVITY ──
   refreshActivity() {
     const list = this.$('activity-list');
-    if (!SESSION_LOG.length) {
-      list.innerHTML = '<div class="activity-empty">No ingestions yet this session.</div>';
-      return;
-    }
+    if (!SESSION_LOG.length) { list.innerHTML = '<div class="activity-empty">No ingestions yet this session.</div>'; return; }
     list.innerHTML = SESSION_LOG.slice(0, 5).map(e =>
       `<div class="activity-item">
         <div class="activity-dot dot-${e.action === 'created' ? 'new' : 'update'}"></div>
@@ -1444,59 +1427,50 @@ const UI = {
   },
 
   // ── TOAST ──
-  showToast(msg, duration = 3000) {
+  showToast(msg, d = 3500) {
     const t = this.$('toast');
-    t.textContent = msg;
-    t.classList.add('show');
-    setTimeout(() => t.classList.remove('show'), duration);
+    t.textContent = msg; t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), d);
   },
+  showError(msg) { this.showToast('⚠️ ' + msg, 5500); },
 
-  showError(msg) {
-    this.showToast('⚠️ ' + msg, 5000);
-  },
-
-  // ── SETTINGS MODAL ──
+  // ── SETTINGS ──
   openSettings() {
-    const m = this.$('settings-modal');
     this.$('s-notion-token').value = S.notionToken;
-    this.$('s-gemini-key').value = S.geminiKey;
+    this.$('s-gemini-key').value   = S.geminiKey;
     this.$('s-root-page-id').value = S.rootPageId;
-    this.$('s-language').value = S.language;
-    m.classList.add('open');
+    this.$('s-language').value     = S.language;
+    this.$('settings-modal').classList.add('open');
   },
-
   bindSettings() {
     this.$('settings-close').onclick = () => this.$('settings-modal').classList.remove('open');
     this.$('settings-modal').onclick = e => {
       if (e.target === this.$('settings-modal')) this.$('settings-modal').classList.remove('open');
     };
     this.$('s-save-btn').onclick = () => {
-      const nt   = this.$('s-notion-token').value.trim();
-      const gk   = this.$('s-gemini-key').value.trim();
-      const rp   = this.$('s-root-page-id').value.trim();
-      const lang = this.$('s-language').value;
-      if (!nt || !gk || !rp) { this.showToast('⚠️ All three fields are required.'); return; }
+      const nt = this.$('s-notion-token').value.trim(), gk = this.$('s-gemini-key').value.trim();
+      const rp = this.$('s-root-page-id').value.trim(), lang = this.$('s-language').value;
+      if (!nt || !gk || !rp) { this.showToast('⚠️ All three API fields are required.'); return; }
       S.save(nt, gk, rp, lang);
       this.$('settings-modal').classList.remove('open');
       this.refreshSetupBanner();
       this.showToast('✓ Settings saved');
     };
-
-    // Copy shortcut URL on click
+    this.$('signout-btn').onclick = () => {
+      this.$('settings-modal').classList.remove('open');
+      Auth.signOut();
+    };
     this.$('shortcut-url-block').onclick = function() {
       navigator.clipboard?.writeText(this.textContent).then(() => UI.showToast('Copied!'));
     };
   },
 
-  // ── URL PARAM (iOS Shortcut integration) ──
+  // ── URL PARAM (iOS Shortcut) ──
   handleUrlParam() {
     const param = new URLSearchParams(location.search).get('url');
     if (param) {
       this.setTab('url');
       this.$('url-input').value = decodeURIComponent(param);
-      if (S.isConfigured()) {
-        setTimeout(() => this.processUrl(), 600);
-      }
     }
   }
 };
