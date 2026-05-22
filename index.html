@@ -499,7 +499,7 @@
   </div>
 
   <div id="lang-picker">
-    <p class="lang-picker-msg">🇰🇷 Korean source detected. Write wiki in:</p>
+    <p class="lang-picker-msg">🇰🇷 한국어 소스 감지됨 — 위키를 어떤 언어로 쓸까요?</p>
     <div class="lang-picker-btns">
       <button class="btn-lang" onclick="UI.pickLang('ko')">한국어 🇰🇷</button>
       <button class="btn-lang" onclick="UI.pickLang('en')">English 🇺🇸</button>
@@ -639,7 +639,7 @@
 <!-- ── JAVASCRIPT ─────────────────────────────── -->
 <script>
 'use strict';
-const APP_VERSION = '1.2.1';
+const APP_VERSION = '1.2.2';
 document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
 // ─── FIREBASE CONFIG STORE ────────────────────────────────────────────────────
@@ -730,26 +730,56 @@ function nextVersion(v) {
 function today() { return new Date().toISOString().slice(0, 10); }
 
 function isKoreanContent(text, url) {
-  const koreanDomains = ['milemoa.com', 'naver.com', 'daum.net', 'tistory.com', 'nate.com', 'dcinside.com'];
-  if (koreanDomains.some(d => url.includes(d))) return true;
+  if (isKoreanDomain(url)) return true;
   return (text.match(/[가-힯]/g) || []).length > 100;
+}
+
+function isKoreanDomain(url) {
+  return ['milemoa.com', 'naver.com', 'daum.net', 'tistory.com',
+          'nate.com', 'dcinside.com', 'namu.wiki', 'ruliweb.com']
+    .some(d => url.includes(d));
 }
 
 // ─── CONTENT FETCHER ──────────────────────────────────────────────────────────
 const F = {
   async fetchUrl(url) {
-    const res = await fetch('https://api.allorigins.win/get?url=' + encodeURIComponent(url));
-    if (!res.ok) throw new Error('Could not fetch the URL. The site may block external access.');
-    const data = await res.json();
-    if (!data.contents) throw new Error('No content returned from the URL.');
+    const PROXIES = [
+      'https://api.allorigins.win/get?url=',
+      'https://api.codetabs.com/v1/proxy?quest=',
+    ];
 
-    const html = data.contents;
+    let html = null, finalUrl = url;
+
+    for (const proxy of PROXIES) {
+      try {
+        const res = await fetch(proxy + encodeURIComponent(url));
+        if (!res.ok) continue;
+        const data = await res.json();
+        if (proxy.includes('allorigins')) {
+          if (!data.contents) continue;
+          html = data.contents;
+          finalUrl = data.status?.url || url;
+        } else {
+          // codetabs returns raw HTML string or wrapped in an object
+          html = typeof data === 'string' ? data : (data.contents || '');
+          finalUrl = url;
+        }
+        if (html) break;
+      } catch { continue; }
+    }
+
+    if (!html) throw new Error(
+      'Could not fetch the URL via any proxy. The site may block external access.'
+    );
+
     const text = htmlToText(html);
-    if (text.length < 80) throw new Error('Could not extract meaningful text from this URL.');
+    if (text.length < 80) throw new Error(
+      'Fetched the URL but could not extract meaningful text. The page may require JavaScript or a login.'
+    );
 
-    // Extract comments only for milemoa.com (trusted community source)
-    const finalUrl = data.status?.url || url;
-    const comments = finalUrl.includes('milemoa.com') ? this.extractMilemoaComments(html) : [];
+    // Extract comments for milemoa.com (trusted community source)
+    const comments = (url.includes('milemoa.com') || finalUrl.includes('milemoa.com'))
+      ? this.extractMilemoaComments(html) : [];
 
     return { text: text.slice(0, 14000), url: finalUrl, comments };
   },
@@ -880,13 +910,11 @@ Return ONLY valid JSON. No markdown, no code fences, no explanation.`;
 
   async analyze(parts) {
     const url = this.BASE + this.MODEL + ':generateContent?key=' + S.geminiKey;
+    const cfg = { responseMimeType: 'application/json', temperature: 0.3, maxOutputTokens: 8192 };
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts }],
-        generationConfig: { responseMimeType: 'application/json', temperature: 0.3 }
-      })
+      body: JSON.stringify({ contents: [{ parts }], generationConfig: cfg })
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -896,7 +924,19 @@ Return ONLY valid JSON. No markdown, no code fences, no explanation.`;
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) throw new Error('Gemini returned no content.');
     try { return JSON.parse(text); }
-    catch { throw new Error('Gemini returned invalid JSON. Try again.'); }
+    catch {
+      // One automatic retry — guards against transient truncation
+      const res2 = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts }], generationConfig: cfg })
+      });
+      if (!res2.ok) throw new Error('Gemini returned invalid JSON and retry failed.');
+      const data2 = await res2.json();
+      const text2 = data2.candidates?.[0]?.content?.parts?.[0]?.text;
+      try { return JSON.parse(text2 || ''); }
+      catch { throw new Error('Gemini returned invalid JSON after retry. Try a shorter article.'); }
+    }
   },
 
   buildUrlParts(text, cats, comments, lang) {
@@ -1118,10 +1158,16 @@ const W = {
   _state: null,
 
   async analyze(source, type) {
-    UI.showProgress(['Fetching content', 'Loading wiki structure', 'AI analysis']);
     let contentText = '', sourceUrl = '', sourceTitle = '', comments = [];
     let existingCats = []; // [{ name, rawId, topics: [{ title, rawId }] }]
     let wikiLang = 'en'; // default English; may be overridden by lang picker
+
+    // Domain check BEFORE showProgress — picker is the first thing user sees (above fold)
+    if (type === 'url' && isKoreanDomain(source)) {
+      wikiLang = await UI.showLangPicker();
+    }
+
+    UI.showProgress(['Fetching content', 'Loading wiki structure', 'AI analysis']);
 
     try {
       // Step 1 — fetch content
@@ -1131,14 +1177,16 @@ const W = {
         try { fetched = await F.fetchUrl(source); }
         catch (e) { throw new Error('Step 1 – ' + e.message); }
         contentText = fetched.text; sourceUrl = fetched.url; comments = fetched.comments || [];
+
+        // Fallback heuristic for Korean pages on unlisted domains
+        if (wikiLang === 'en' && isKoreanContent(contentText, sourceUrl)) {
+          UI.hideProgress();
+          wikiLang = await UI.showLangPicker();
+          UI.showProgress(['Fetching content', 'Loading wiki structure', 'AI analysis']);
+          UI.setStep(0, 'done');
+        }
       }
       UI.setStep(0, 'done');
-
-      // Language picker — ask user when Korean source is detected
-      if (type === 'url' && isKoreanContent(contentText, sourceUrl)) {
-        UI.setLabel('Choose wiki language…');
-        wikiLang = await UI.showLangPicker();
-      }
 
       // Step 2 — load Notion wiki structure (gives Gemini context for category suggestions)
       UI.setStep(1, 'active'); UI.setLabel('Loading wiki structure…');
