@@ -684,6 +684,16 @@
         <div class="hint">Open your "Personal Wiki" Notion page → Share → Copy link. The 32-char ID is at the end of the URL.</div>
       </div>
 
+      <div class="field">
+        <label>WIKI LANGUAGE</label>
+        <select id="s-language" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:14px;padding:11px 14px;outline:none;font-family:inherit;">
+          <option value="auto">🌐 Auto-detect (matches source language)</option>
+          <option value="ko">🇰🇷 한국어 (Korean)</option>
+          <option value="en">🇺🇸 English</option>
+        </select>
+        <div class="hint">Controls the language of Summary and Key Points written to Notion. Category and page titles are always in English.</div>
+      </div>
+
       <div class="hint warn-hint" style="margin-bottom:16px;">
         ⚠️ Notion API calls are routed through corsproxy.io to handle browser CORS restrictions. Your token is included in these requests. This is a personal tool — use accordingly.
       </div>
@@ -739,12 +749,14 @@ const S = {
   get geminiKey()    { return localStorage.getItem('wiki_gk')  || ''; },
   get rootPageId()   { return localStorage.getItem('wiki_rp')  || ''; },
   get logPageId()    { return localStorage.getItem('wiki_lp')  || ''; },
+  get language()     { return localStorage.getItem('wiki_lang') || 'auto'; }, // 'auto' | 'en' | 'ko'
   setLogPageId(id)   { localStorage.setItem('wiki_lp', id); },
-  save(nt, gk, rp) {
+  save(nt, gk, rp, lang) {
     if (rp !== this.rootPageId) localStorage.removeItem('wiki_lp'); // reset log cache
     localStorage.setItem('wiki_nt', nt.trim());
     localStorage.setItem('wiki_gk', gk.trim());
     localStorage.setItem('wiki_rp', rp.trim().replace(/-/g,'').slice(-32));
+    localStorage.setItem('wiki_lang', lang || 'auto');
   },
   isConfigured() { return !!(this.notionToken && this.geminiKey && this.rootPageId); }
 };
@@ -803,19 +815,30 @@ const G = {
   MODEL: 'gemini-2.5-flash',
   BASE: 'https://generativelanguage.googleapis.com/v1beta/models/',
 
-  PROMPT: `You are a personal knowledge wiki assistant. Analyze the provided content and return a JSON object for a personal wiki system.
+  LANG_INSTRUCTIONS: {
+    auto: 'Detect the language of the source content and write "summary" and "keyPoints" in that same language. Write "topicTitle", "category", and "subcategory" in English regardless (used for page titles).',
+    en:   'Write "summary" and "keyPoints" in English. Write "topicTitle", "category", and "subcategory" in English.',
+    ko:   '"summary"와 "keyPoints"는 반드시 한국어로 작성하세요. "topicTitle", "category", "subcategory"는 영어로 작성하세요 (페이지 제목으로 사용됩니다).',
+  },
+
+  buildPrompt() {
+    const langNote = this.LANG_INSTRUCTIONS[S.language] || this.LANG_INSTRUCTIONS.auto;
+    return `You are a personal knowledge wiki assistant. Analyze the provided content and return a JSON object for a personal wiki system.
+
+LANGUAGE RULE: ${langNote}
 
 Return a JSON object with EXACTLY these fields:
 {
-  "topicTitle": "2-4 word topic name",
-  "category": "1-2 word primary category (Travel / Tech / Health / Finance / Food / Work / Personal / Science / Culture)",
-  "subcategory": "1-3 word specific sub-category — this becomes the wiki PAGE TITLE (e.g., Mexico City, LLM Tools, Marathon Training, Sourdough Baking)",
-  "summary": "2-3 paragraph synthesis of the core knowledge and insights. Write as if explaining to yourself for future reference. Be specific and include key details.",
+  "topicTitle": "2-4 word topic name (English)",
+  "category": "1-2 word primary category in English (Travel / Tech / Health / Finance / Food / Work / Personal / Science / Culture)",
+  "subcategory": "1-3 word specific sub-category in English — this becomes the wiki PAGE TITLE (e.g., Mexico City, LLM Tools, Marathon Training)",
+  "summary": "2-3 paragraph synthesis of the core knowledge and insights. Write as if explaining to yourself for future reference. Be specific.",
   "keyPoints": ["5-8 specific, actionable facts or insights as an array of strings. Each should stand alone as a useful fact."],
   "sourceTitle": "the title or best description of the source"
 }
 
-Return ONLY valid JSON. No markdown, no code blocks, no explanation.`,
+Return ONLY valid JSON. No markdown, no code blocks, no explanation.`;
+  },
 
   async analyze(parts) {
     const url = this.BASE + this.MODEL + ':generateContent?key=' + S.geminiKey;
@@ -840,13 +863,13 @@ Return ONLY valid JSON. No markdown, no code blocks, no explanation.`,
   },
 
   buildUrlParts(text) {
-    return [{ text: this.PROMPT + '\n\nContent to analyze:\n---\n' + text + '\n---' }];
+    return [{ text: this.buildPrompt() + '\n\nContent to analyze:\n---\n' + text + '\n---' }];
   },
 
   buildImageParts(base64, mimeType) {
     return [
       { inline_data: { mime_type: mimeType, data: base64 } },
-      { text: this.PROMPT + '\n\nAnalyze the content shown in this screenshot/image.' }
+      { text: this.buildPrompt() + '\n\nAnalyze the content shown in this screenshot/image.' }
     ];
   }
 };
@@ -1438,6 +1461,7 @@ const UI = {
     this.$('s-notion-token').value = S.notionToken;
     this.$('s-gemini-key').value = S.geminiKey;
     this.$('s-root-page-id').value = S.rootPageId;
+    this.$('s-language').value = S.language;
     m.classList.add('open');
   },
 
@@ -1447,11 +1471,12 @@ const UI = {
       if (e.target === this.$('settings-modal')) this.$('settings-modal').classList.remove('open');
     };
     this.$('s-save-btn').onclick = () => {
-      const nt = this.$('s-notion-token').value.trim();
-      const gk = this.$('s-gemini-key').value.trim();
-      const rp = this.$('s-root-page-id').value.trim();
+      const nt   = this.$('s-notion-token').value.trim();
+      const gk   = this.$('s-gemini-key').value.trim();
+      const rp   = this.$('s-root-page-id').value.trim();
+      const lang = this.$('s-language').value;
       if (!nt || !gk || !rp) { this.showToast('⚠️ All three fields are required.'); return; }
-      S.save(nt, gk, rp);
+      S.save(nt, gk, rp, lang);
       this.$('settings-modal').classList.remove('open');
       this.refreshSetupBanner();
       this.showToast('✓ Settings saved');
