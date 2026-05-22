@@ -853,28 +853,49 @@ Return ONLY valid JSON. No markdown, no code blocks, no explanation.`,
 
 // ─── NOTION CLIENT ────────────────────────────────────────────────────────────
 const N = {
-  PROXY: 'https://corsproxy.io/?url=',
-  BASE:  'https://api.notion.com/v1',
-  VER:   '2022-06-28',
+  // Fallback chain — tries each proxy in order until one works
+  PROXIES: [
+    url => 'https://corsproxy.io/?url=' + encodeURIComponent(url),
+    url => 'https://proxy.cors.sh/' + url,
+    url => 'https://cors-anywhere.fmdev.workers.dev/' + url,
+  ],
+  BASE: 'https://api.notion.com/v1',
+  VER:  '2022-06-28',
 
   async req(method, path, body) {
-    const url = this.PROXY + encodeURIComponent(this.BASE + path);
+    const target = this.BASE + path;
     const opts = {
       method,
       headers: {
         'Authorization': 'Bearer ' + S.notionToken,
         'Notion-Version': this.VER,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest'
       }
     };
     if (body) opts.body = JSON.stringify(body);
-    const res = await fetch(url, opts);
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error('Notion error: ' + (err.message || res.status));
+
+    let lastErr;
+    for (const makeUrl of this.PROXIES) {
+      try {
+        const res = await fetch(makeUrl(target), opts);
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          // 401/403 = bad token, no point retrying other proxies
+          if (res.status === 401) throw new Error('Notion: Invalid token. Check your API key in Settings.');
+          if (res.status === 403) throw new Error('Notion: Access denied. Make sure the page is shared with your integration.');
+          if (res.status === 404) throw new Error('Notion: Page not found. Check your Root Page ID in Settings.');
+          throw new Error('Notion error ' + res.status + ': ' + (err.message || 'unknown'));
+        }
+        if (res.status === 204) return null;
+        return res.json();
+      } catch (e) {
+        // Re-throw Notion API errors immediately (no point trying other proxies)
+        if (e.message.startsWith('Notion:') || e.message.startsWith('Notion error')) throw e;
+        lastErr = e; // network/CORS error — try next proxy
+      }
     }
-    if (res.status === 204) return null;
-    return res.json();
+    throw new Error('Could not reach Notion after trying 3 proxies. Check your internet connection and try again.');
   },
 
   // Get child pages of a Notion page
@@ -1047,13 +1068,16 @@ const W = {
     let parts, sourceUrl = '', sourceTitle = '';
 
     try {
+      UI.setStep(0, 'active');
       if (type === 'url') {
-        UI.setStep(0, 'active');
-        const { text, url } = await F.fetchUrl(source);
-        sourceUrl = url;
-        parts = G.buildUrlParts(text);
+        UI.setLabel('Fetching page content…');
+        let fetched;
+        try { fetched = await F.fetchUrl(source); }
+        catch (e) { throw new Error('Step 1 – Fetch failed: ' + e.message); }
+        sourceUrl = fetched.url;
+        parts = G.buildUrlParts(fetched.text);
       } else {
-        UI.setStep(0, 'active');
+        UI.setLabel('Reading image…');
         parts = G.buildImageParts(source.base64, source.mimeType);
       }
 
@@ -1061,7 +1085,9 @@ const W = {
       UI.setStep(1, 'active');
       UI.setLabel('Analyzing with Gemini Flash…');
 
-      const analysis = await G.analyze(parts);
+      let analysis;
+      try { analysis = await G.analyze(parts); }
+      catch (e) { throw new Error('Step 2 – Gemini failed: ' + e.message); }
       sourceTitle = analysis.sourceTitle || (type === 'url' ? new URL(sourceUrl).hostname : 'Screenshot');
 
       UI.setStep(1, 'done');
@@ -1069,7 +1095,9 @@ const W = {
       UI.setLabel('Checking existing wiki pages…');
 
       // Look up categories + topics in Notion
-      const categories = await N.childPages(S.rootPageId);
+      let categories;
+      try { categories = await N.childPages(S.rootPageId); }
+      catch (e) { throw new Error('Step 3 – Notion failed: ' + e.message); }
       const catMatch = categories.find(c => c.title.toLowerCase() === analysis.category.toLowerCase());
 
       let existingTopic = null, newVersion = '1.0', existingCategoryId = catMatch?.rawId || null;
