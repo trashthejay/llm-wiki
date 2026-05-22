@@ -639,7 +639,7 @@
 <!-- ── JAVASCRIPT ─────────────────────────────── -->
 <script>
 'use strict';
-const APP_VERSION = '1.2.4';
+const APP_VERSION = '1.2.5';
 document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
 // ─── FIREBASE CONFIG STORE ────────────────────────────────────────────────────
@@ -752,20 +752,28 @@ const F = {
 
     for (const proxy of PROXIES) {
       try {
+        console.log('[wiki] Trying proxy:', proxy);
         const res = await fetch(proxy + encodeURIComponent(url));
+        console.log('[wiki] Proxy response status:', res.status);
         if (!res.ok) continue;
-        const data = await res.json();
         if (proxy.includes('allorigins')) {
+          // allorigins returns JSON: { contents: "<html>", status: {...} }
+          const data = await res.json();
           if (!data.contents) continue;
           html = data.contents;
           finalUrl = data.status?.url || url;
         } else {
-          // codetabs returns raw HTML string or wrapped in an object
-          html = typeof data === 'string' ? data : (data.contents || '');
+          // codetabs returns raw HTML directly as text (NOT JSON)
+          html = await res.text();
           finalUrl = url;
         }
-        if (html) break;
-      } catch { continue; }
+        console.log('[wiki] Got HTML length:', html ? html.length : 0);
+        if (html && html.length > 200) break;
+        html = null; // too short — try next proxy
+      } catch (e) {
+        console.warn('[wiki] Proxy failed:', proxy, e.message);
+        continue;
+      }
     }
 
     if (!html) throw new Error(
@@ -1243,8 +1251,7 @@ const W = {
       UI.showPreview(this._state);
 
     } catch (e) {
-      UI.hideProgress();
-      UI.showError(e.message || 'Unknown error. Check your API keys.');
+      UI.showProgressError(e.message || 'Unknown error. Check your API keys.');
     }
   },
 
@@ -1351,8 +1358,7 @@ const W = {
       }, 800);
 
     } catch (e) {
-      UI.hideProgress();
-      UI.showError(e.message || 'Failed to update Notion.');
+      UI.showProgressError(e.message || 'Failed to update Notion.');
     }
   }
 };
@@ -1484,7 +1490,7 @@ const UI = {
       const dz = this.$('drop-zone');
       dz.innerHTML = '<img class="preview-img" src="data:' + img.mimeType + ';base64,' + img.base64 + '" /><p>' + file.name + '</p>';
       await W.analyze(img, 'image');
-    } catch (e) { this.hideProgress(); this.showError(e.message); }
+    } catch (e) { this.showProgressError(e.message); }
   },
 
   resetInputs() {
@@ -1525,6 +1531,15 @@ const UI = {
     this.$('progress').classList.remove('visible');
     this.$('progress-steps').innerHTML = '';
     this.$('progress-label').innerHTML = '';
+  },
+  // Persistent error in progress panel — stays visible until user dismisses
+  showProgressError(msg) {
+    console.error('[wiki]', msg);
+    const el = this.$('progress');
+    el.classList.add('visible');
+    this.$('progress-label').innerHTML =
+      '<div style="color:var(--error);font-weight:600;margin-bottom:8px;">⚠️ ' + msg + '</div>' +
+      '<button onclick="UI.hideProgress()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 14px;cursor:pointer;">Dismiss</button>';
   },
 
   // ── PREVIEW ──
