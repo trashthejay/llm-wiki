@@ -625,7 +625,7 @@
 <!-- ── JAVASCRIPT ─────────────────────────────── -->
 <script>
 'use strict';
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
 // ─── FIREBASE CONFIG STORE ────────────────────────────────────────────────────
@@ -722,9 +722,56 @@ const F = {
     if (!res.ok) throw new Error('Could not fetch the URL. The site may block external access.');
     const data = await res.json();
     if (!data.contents) throw new Error('No content returned from the URL.');
-    const text = htmlToText(data.contents);
+
+    const html = data.contents;
+    const text = htmlToText(html);
     if (text.length < 80) throw new Error('Could not extract meaningful text from this URL.');
-    return { text: text.slice(0, 14000), url: data.status?.url || url };
+
+    // Extract comments only for milemoa.com (trusted community source)
+    const finalUrl = data.status?.url || url;
+    const comments = finalUrl.includes('milemoa.com') ? this.extractMilemoaComments(html) : [];
+
+    return { text: text.slice(0, 14000), url: finalUrl, comments };
+  },
+
+  // Milemoa.com comment extractor — tries common Korean CMS selectors
+  extractMilemoaComments(html) {
+    const d = document.createElement('div');
+    d.innerHTML = html;
+    d.querySelectorAll('script,style,nav,header,footer').forEach(el => el.remove());
+
+    const candidates = [];
+    // Try selectors used by XpressEngine / common Korean CMS patterns
+    const selectors = [
+      '.comment_list .xe_content',
+      '.comment_list .comment_body',
+      '.comment_list .content',
+      '#comment_list .xe_content',
+      '.cmt_list .xe_content',
+      '.comment .xe_content',
+      '[class*="comment"] .xe_content',
+      '[class*="comment"] .content',
+      '.reply_content',
+    ];
+
+    for (const sel of selectors) {
+      d.querySelectorAll(sel).forEach(el => {
+        const t = el.textContent.replace(/\s+/g, ' ').trim();
+        if (t.length > 20 && t.length < 3000) candidates.push(t);
+      });
+      if (candidates.length >= 3) break;
+    }
+
+    // Broader fallback: any element with "comment" in its class containing real text
+    if (candidates.length === 0) {
+      d.querySelectorAll('[class*="comment"],[class*="cmt"],[class*="reply"]').forEach(el => {
+        if (el.children.length > 5) return; // skip containers
+        const t = el.textContent.replace(/\s+/g, ' ').trim();
+        if (t.length > 30 && t.length < 2000) candidates.push(t);
+      });
+    }
+
+    return [...new Set(candidates)].slice(0, 30); // deduplicate, cap at 30
   },
 
   async readImageFile(file) {
@@ -748,7 +795,7 @@ const G = {
     ko:   '"summary"와 "keyPoints"는 반드시 한국어로 작성하세요. "topicTitle", "category", "subcategory", "sourceTitle"는 영어로 작성하세요.',
   },
 
-  buildPrompt(existingCats) {
+  buildPrompt(existingCats, comments) {
     const langNote = this.LANG_INSTRUCTIONS[S.language] || this.LANG_INSTRUCTIONS.auto;
 
     let catSection = '';
@@ -758,36 +805,57 @@ const G = {
           `- ${c.name} (${c.topics.length} pages${c.topics.length ? ': ' + c.topics.slice(0,6).join(', ') : ''})`
         ).join('\n') +
         '\n\nCategory guidance:\n' +
-        '• If the content fits an EXISTING category → set categoryStatus: "existing"\n' +
-        '• If it\'s genuinely new territory → set categoryStatus: "new"\n' +
-        '• If an existing category has grown broad (4+ topics) AND this content makes a better grouping obvious → set categoryStatus: "evolved" (suggest sparingly — only when clearly beneficial)\n' +
-        '• For "evolved": suggest a new category name in "category" field and explain why in "evolutionSuggestion"';
+        '• Fits existing category → categoryStatus: "existing"\n' +
+        '• New territory → categoryStatus: "new"\n' +
+        '• Existing category grown too broad (4+ topics) → categoryStatus: "evolved" (suggest sparingly)\n' +
+        '• For "evolved": put new name in "category", explain in "evolutionSuggestion"';
     } else {
       catSection = '\n\nThis wiki has no existing categories yet. Set categoryStatus: "new".';
     }
 
-    return `You are a personal knowledge wiki assistant. Analyze the provided content and return a JSON object.
+    let commentSection = '';
+    if (comments && comments.length > 0) {
+      commentSection = '\n\nREADER COMMENTS (Milemoa community — trusted expert source):\n' +
+        'From the comments below, extract ONLY those that:\n' +
+        '• Correct a factual error in the article\n' +
+        '• Add important information the article missed\n' +
+        '• Provide professional/expert context with substance\n' +
+        'IGNORE: compliments (좋은 글, 감사합니다, 잘 읽었습니다), simple questions, short reactions.\n\n' +
+        comments.slice(0, 25).join('\n\n---\n\n').slice(0, 6000);
+    }
+
+    return `You are a personal knowledge wiki assistant. Create a DETAILED, thorough wiki entry — think Wikipedia depth, not a brief summary. A reader should walk away fully informed on this topic.
 
 LANGUAGE RULE: ${langNote}
-${catSection}
+${catSection}${commentSection}
 
 Return a JSON object with EXACTLY these fields:
 {
   "topicTitle": "2-4 word topic name (English)",
-  "category": "1-2 word primary category (English) — Travel / Tech / Health / Finance / Food / Work / Personal / Science / Culture / or suggest a new one",
-  "subcategory": "1-3 word page title (English) — this becomes the Notion page name",
-  "summary": "2-3 paragraph synthesis of core knowledge. Write for your future self.",
-  "keyPoints": ["5-8 specific facts or insights as string array"],
-  "sourceTitle": "title or description of the source (English)",
+  "category": "1-2 word primary category (English) — Travel / Tech / Health / Finance / Food / Work / Personal / Science / Culture",
+  "subcategory": "1-3 word page title (English) — becomes the Notion page name",
+  "sourceTitle": "title of the source (English)",
+  "overview": "2-3 thorough paragraphs introducing this topic: what it is, why it matters, key context. Be comprehensive.",
+  "sections": [
+    {
+      "heading": "Descriptive section title (e.g. How It Works, Requirements, Step-by-Step Guide, Pros & Cons, Common Pitfalls, Real-World Examples)",
+      "content": "3-5 detailed paragraphs covering this aspect. Include specific facts, numbers, examples. Write as if teaching someone who knows nothing about this."
+    }
+  ],
+  "keyFacts": ["Concrete fact with specific number/date/name — e.g. Minimum spend: $4,000 in 3 months", "Another specific fact"],
+  "keyPoints": ["Actionable takeaway for future reference", "Another actionable insight"],
+  "expertComments": ${comments && comments.length ? '["paraphrased expert insight from a comment", "another if found"]' : '[]'},
   "categoryStatus": "existing" or "new" or "evolved",
   "evolutionSuggestion": null or {
-    "currentCategory": "the existing category this evolved from",
-    "suggestedCategory": "the proposed new category name",
-    "affectedTopics": ["topic1", "topic2"],
-    "reason": "one sentence explaining the benefit of this reorganization"
+    "currentCategory": "existing category name",
+    "suggestedCategory": "proposed new name",
+    "affectedTopics": ["topic1"],
+    "reason": "one sentence on the benefit"
   }
 }
 
+IMPORTANT: "sections" must have 2-4 substantive sections. Each section "content" must be detailed — at least 3 paragraphs. This is a WIKI, not a summary.
+${comments && comments.length ? '\nFor "expertComments": include only the insights that genuinely add value or correct errors. Empty array if none qualify.' : ''}
 Return ONLY valid JSON. No markdown, no code fences, no explanation.`;
   },
 
@@ -812,14 +880,14 @@ Return ONLY valid JSON. No markdown, no code fences, no explanation.`;
     catch { throw new Error('Gemini returned invalid JSON. Try again.'); }
   },
 
-  buildUrlParts(text, cats) {
-    return [{ text: this.buildPrompt(cats) + '\n\nContent to analyze:\n---\n' + text + '\n---' }];
+  buildUrlParts(text, cats, comments) {
+    return [{ text: this.buildPrompt(cats, comments) + '\n\nContent to analyze:\n---\n' + text + '\n---' }];
   },
 
   buildImageParts(base64, mimeType, cats) {
     return [
       { inline_data: { mime_type: mimeType, data: base64 } },
-      { text: this.buildPrompt(cats) + '\n\nAnalyze the content shown in this screenshot/image.' }
+      { text: this.buildPrompt(cats, []) + '\n\nAnalyze the content shown in this screenshot/image.' }
     ];
   }
 };
@@ -945,11 +1013,41 @@ function buildWikiBlocks(analysis, version, date, sources, archived) {
     callout:{ rich_text:[{ type:'text', text:{ content:'v' + version + '  ·  ' + date } }],
       icon:{ type:'emoji', emoji:'📌' }, color:'blue_background' } });
 
-  blk.push(h2('Summary'));
-  (analysis.summary || '').split('\n\n').filter(s => s.trim()).forEach(s => blk.push(p(s.trim())));
+  // Overview (replaces old "Summary" — 2-3 thorough paragraphs)
+  const overviewText = analysis.overview || analysis.summary || '';
+  if (overviewText) {
+    blk.push(h2('Overview'));
+    overviewText.split('\n\n').filter(s => s.trim()).forEach(s => blk.push(p(s.trim())));
+  }
 
-  blk.push(h2('Key Points'));
-  (analysis.keyPoints || []).forEach(pt => blk.push(li(pt)));
+  // Detailed sections (Wikipedia-depth)
+  if (analysis.sections && analysis.sections.length > 0) {
+    for (const sec of analysis.sections) {
+      blk.push(h2(sec.heading || 'Details'));
+      (sec.content || '').split('\n\n').filter(s => s.trim()).forEach(s => blk.push(p(s.trim())));
+    }
+  }
+
+  // Key Facts (concrete numbers/dates)
+  if (analysis.keyFacts && analysis.keyFacts.length > 0) {
+    blk.push(h2('Key Facts'));
+    analysis.keyFacts.forEach(f => blk.push(li(f)));
+  }
+
+  // Key Takeaways (actionable insights)
+  if (analysis.keyPoints && analysis.keyPoints.length > 0) {
+    blk.push(h2('Key Takeaways'));
+    analysis.keyPoints.forEach(pt => blk.push(li(pt)));
+  }
+
+  // Expert Insights (filtered milemoa comments only)
+  if (analysis.expertComments && analysis.expertComments.length > 0) {
+    blk.push(h2('Expert Insights'));
+    blk.push({ object:'block', type:'callout',
+      callout:{ rich_text:[{ type:'text', text:{ content:'From milemoa.com community comments' } }],
+        icon:{ type:'emoji', emoji:'💬' }, color:'gray_background' } });
+    analysis.expertComments.forEach(c => blk.push(li(c)));
+  }
 
   blk.push(h2('Sources Ingested'));
   sources.forEach(src => {
@@ -986,7 +1084,9 @@ function extractPageContent(blocks) {
       inSummary = inKeys = inSources = false;
     } else if (b.type === 'heading_2') {
       const t = text.toLowerCase();
-      inSummary = t === 'summary'; inKeys = t === 'key points'; inSources = t === 'sources ingested';
+      inSummary = t === 'summary' || t === 'overview';
+      inKeys = t === 'key points' || t === 'key takeaways';
+      inSources = t === 'sources ingested';
     } else if (b.type === 'paragraph'         && inSummary  && text) summaryParagraphs.push(text);
     else if (b.type === 'bulleted_list_item'  && inKeys     && text) keyPoints.push(text);
     else if (b.type === 'bulleted_list_item'  && inSources  && text) sources.push(text);
@@ -1000,7 +1100,7 @@ const W = {
 
   async analyze(source, type) {
     UI.showProgress(['Fetching content', 'Loading wiki structure', 'AI analysis']);
-    let contentText = '', sourceUrl = '', sourceTitle = '';
+    let contentText = '', sourceUrl = '', sourceTitle = '', comments = [];
     let existingCats = []; // [{ name, rawId, topics: [{ title, rawId }] }]
 
     try {
@@ -1010,7 +1110,7 @@ const W = {
         let fetched;
         try { fetched = await F.fetchUrl(source); }
         catch (e) { throw new Error('Step 1 – ' + e.message); }
-        contentText = fetched.text; sourceUrl = fetched.url;
+        contentText = fetched.text; sourceUrl = fetched.url; comments = fetched.comments || [];
       }
       UI.setStep(0, 'done');
 
@@ -1028,7 +1128,7 @@ const W = {
       // Step 3 — Gemini analysis with full category context
       UI.setStep(2, 'active'); UI.setLabel('Analyzing with Gemini Flash…');
       const parts = type === 'url'
-        ? G.buildUrlParts(contentText, existingCats)
+        ? G.buildUrlParts(contentText, existingCats, comments)
         : G.buildImageParts(source.base64, source.mimeType, existingCats);
 
       let analysis;
