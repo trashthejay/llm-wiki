@@ -236,6 +236,12 @@
     /* ── PROGRESS ── */
     #progress { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; display: none; }
     #progress.visible { display: block; }
+    #lang-picker { background: var(--surface); border: 1px solid var(--warn); border-radius: var(--radius); padding: 16px; display: none; text-align: center; }
+    #lang-picker.visible { display: block; }
+    .lang-picker-msg { font-size: 14px; color: var(--text); margin-bottom: 12px; }
+    .lang-picker-btns { display: flex; gap: 10px; }
+    .btn-lang { flex: 1; padding: 10px 0; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 15px; font-weight: 600; cursor: pointer; transition: background 0.15s, border-color 0.15s; }
+    .btn-lang:hover, .btn-lang:active { background: var(--accent); border-color: var(--accent); }
     .progress-steps { display: flex; gap: 0; margin-bottom: 12px; }
     .step {
       flex: 1; text-align: center; font-size: 11px; color: var(--muted);
@@ -492,6 +498,14 @@
     <div class="progress-label" id="progress-label"></div>
   </div>
 
+  <div id="lang-picker">
+    <p class="lang-picker-msg">🇰🇷 Korean source detected. Write wiki in:</p>
+    <div class="lang-picker-btns">
+      <button class="btn-lang" onclick="UI.pickLang('ko')">한국어 🇰🇷</button>
+      <button class="btn-lang" onclick="UI.pickLang('en')">English 🇺🇸</button>
+    </div>
+  </div>
+
   <!-- Preview panel -->
   <div id="preview">
     <div class="preview-header">
@@ -625,7 +639,7 @@
 <!-- ── JAVASCRIPT ─────────────────────────────── -->
 <script>
 'use strict';
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.2.1';
 document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
 // ─── FIREBASE CONFIG STORE ────────────────────────────────────────────────────
@@ -715,6 +729,12 @@ function nextVersion(v) {
 
 function today() { return new Date().toISOString().slice(0, 10); }
 
+function isKoreanContent(text, url) {
+  const koreanDomains = ['milemoa.com', 'naver.com', 'daum.net', 'tistory.com', 'nate.com', 'dcinside.com'];
+  if (koreanDomains.some(d => url.includes(d))) return true;
+  return (text.match(/[가-힯]/g) || []).length > 100;
+}
+
 // ─── CONTENT FETCHER ──────────────────────────────────────────────────────────
 const F = {
   async fetchUrl(url) {
@@ -790,13 +810,12 @@ const G = {
   BASE:  'https://generativelanguage.googleapis.com/v1beta/models/',
 
   LANG_INSTRUCTIONS: {
-    auto: 'Detect the language of the source and write "summary" and "keyPoints" in that same language. Write "topicTitle", "category", "subcategory", and "sourceTitle" in English.',
-    en:   'Write ALL fields in English.',
-    ko:   '"summary"와 "keyPoints"는 반드시 한국어로 작성하세요. "topicTitle", "category", "subcategory", "sourceTitle"는 영어로 작성하세요.',
+    en: 'Write ALL content fields (overview, all sections content, keyFacts, keyPoints) in English.',
+    ko: '"overview", "sections"의 모든 "content", "keyFacts", "keyPoints"는 반드시 한국어로 작성하세요. "heading", "topicTitle", "category", "subcategory", "sourceTitle"는 반드시 영어로 유지하세요.',
   },
 
-  buildPrompt(existingCats, comments) {
-    const langNote = this.LANG_INSTRUCTIONS[S.language] || this.LANG_INSTRUCTIONS.auto;
+  buildPrompt(existingCats, comments, lang) {
+    const langNote = this.LANG_INSTRUCTIONS[lang] || this.LANG_INSTRUCTIONS.en;
 
     let catSection = '';
     if (existingCats && existingCats.length) {
@@ -880,14 +899,14 @@ Return ONLY valid JSON. No markdown, no code fences, no explanation.`;
     catch { throw new Error('Gemini returned invalid JSON. Try again.'); }
   },
 
-  buildUrlParts(text, cats, comments) {
-    return [{ text: this.buildPrompt(cats, comments) + '\n\nContent to analyze:\n---\n' + text + '\n---' }];
+  buildUrlParts(text, cats, comments, lang) {
+    return [{ text: this.buildPrompt(cats, comments, lang) + '\n\nContent to analyze:\n---\n' + text + '\n---' }];
   },
 
-  buildImageParts(base64, mimeType, cats) {
+  buildImageParts(base64, mimeType, cats, lang) {
     return [
       { inline_data: { mime_type: mimeType, data: base64 } },
-      { text: this.buildPrompt(cats, []) + '\n\nAnalyze the content shown in this screenshot/image.' }
+      { text: this.buildPrompt(cats, [], lang) + '\n\nAnalyze the content shown in this screenshot/image.' }
     ];
   }
 };
@@ -1102,6 +1121,7 @@ const W = {
     UI.showProgress(['Fetching content', 'Loading wiki structure', 'AI analysis']);
     let contentText = '', sourceUrl = '', sourceTitle = '', comments = [];
     let existingCats = []; // [{ name, rawId, topics: [{ title, rawId }] }]
+    let wikiLang = 'en'; // default English; may be overridden by lang picker
 
     try {
       // Step 1 — fetch content
@@ -1113,6 +1133,12 @@ const W = {
         contentText = fetched.text; sourceUrl = fetched.url; comments = fetched.comments || [];
       }
       UI.setStep(0, 'done');
+
+      // Language picker — ask user when Korean source is detected
+      if (type === 'url' && isKoreanContent(contentText, sourceUrl)) {
+        UI.setLabel('Choose wiki language…');
+        wikiLang = await UI.showLangPicker();
+      }
 
       // Step 2 — load Notion wiki structure (gives Gemini context for category suggestions)
       UI.setStep(1, 'active'); UI.setLabel('Loading wiki structure…');
@@ -1128,8 +1154,8 @@ const W = {
       // Step 3 — Gemini analysis with full category context
       UI.setStep(2, 'active'); UI.setLabel('Analyzing with Gemini Flash…');
       const parts = type === 'url'
-        ? G.buildUrlParts(contentText, existingCats, comments)
-        : G.buildImageParts(source.base64, source.mimeType, existingCats);
+        ? G.buildUrlParts(contentText, existingCats, comments, wikiLang)
+        : G.buildImageParts(source.base64, source.mimeType, existingCats, wikiLang);
 
       let analysis;
       try { analysis = await G.analyze(parts); }
@@ -1231,7 +1257,15 @@ const W = {
       let topicPageId;
       if (p.isNew) {
         let catId = p.existingCategoryId;
-        if (!catId) catId = await N.createPage(S.rootPageId, effectiveCat);
+        if (!catId) {
+          // Re-check live Notion before creating to prevent duplicate category pages
+          try {
+            const liveCats = await N.childPages(S.rootPageId);
+            const liveMatch = liveCats.find(c => c.title.toLowerCase().trim() === effectiveCat.toLowerCase().trim());
+            catId = liveMatch?.rawId || null;
+          } catch {}
+          if (!catId) catId = await N.createPage(S.rootPageId, effectiveCat);
+        }
         const blocks = buildWikiBlocks(a, p.newVersion, p.date, sources, null);
         topicPageId = await N.createPageWithBlocks(catId, a.subcategory, blocks);
       } else {
@@ -1406,6 +1440,21 @@ const UI = {
     this.$('url-input').value = '';
     this.$('drop-zone').innerHTML = '<div class="dz-icon">📷</div><h3>Drop or choose a screenshot</h3><p>Tap to open your photo library or file picker</p>';
     this.$('file-input').value = '';
+  },
+
+  // ── LANGUAGE PICKER ──
+  _langResolve: null,
+  showLangPicker() {
+    this.$('lang-picker').classList.add('visible');
+    return new Promise(resolve => { this._langResolve = resolve; });
+  },
+  hideLangPicker() {
+    this.$('lang-picker').classList.remove('visible');
+    this._langResolve = null;
+  },
+  pickLang(lang) {
+    this.hideLangPicker();
+    if (this._langResolve) this._langResolve(lang);
   },
 
   // ── PROGRESS ──
