@@ -332,6 +332,23 @@
     .evo-btn.keep { background: var(--surface2); color: var(--muted); border-color: var(--border); }
     .evo-btn.keep.selected { background: var(--surface2); color: var(--text); border-color: var(--text); }
 
+    /* ── LINT PANEL ── */
+    .lint-panel {
+      margin: 0;
+      background: #1c150a;
+      border-top: 1px solid #7c5200;
+      padding: 14px 16px;
+      display: none;
+    }
+    .lint-panel.visible { display: block; }
+    .lint-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .lint-title { font-size: 13px; font-weight: 700; color: #d97706; }
+    .lint-item { margin: 8px 0; padding: 10px; background: #221a08; border-radius: 6px; font-size: 13px; border: 1px solid #7c5200; }
+    .lint-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 3px; }
+    .lint-old { color: #ef4444; text-decoration: line-through; opacity: 0.8; line-height: 1.5; }
+    .lint-new { color: #86efac; margin-top: 4px; line-height: 1.5; }
+    .lint-note { font-size: 12px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+
     /* ── PREVIEW BODY ── */
     .preview-body { padding: 14px 16px; }
     .preview-summary { font-size: 13px; color: var(--muted); line-height: 1.6; margin-bottom: 14px; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
@@ -551,6 +568,16 @@
       </div>
     </div>
 
+    <!-- Lint panel (amber) — shown when new content contradicts existing wiki page -->
+    <div class="lint-panel" id="lint-panel">
+      <div class="lint-header">
+        <span>⚠️</span>
+        <span class="lint-title" id="lint-title">Contradictions detected</span>
+      </div>
+      <div id="lint-items"></div>
+      <p class="lint-note">Confirming will update with new information. Old content is preserved in the ⚠️ Outdated section.</p>
+    </div>
+
     <div class="preview-body">
       <div class="preview-summary" id="preview-summary"></div>
       <div class="preview-actions">
@@ -664,7 +691,7 @@
 <!-- ── JAVASCRIPT ─────────────────────────────── -->
 <script>
 'use strict';
-const APP_VERSION = '1.5.6';
+const APP_VERSION = '1.5.8';
 document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
 // ─── FIREBASE CONFIG STORE ────────────────────────────────────────────────────
@@ -1136,12 +1163,22 @@ Return a JSON object with EXACTLY these fields:
     "suggestedCategory": "proposed new name",
     "affectedTopics": ["topic1"],
     "reason": "one sentence on the benefit"
+  },
+  "travelDetails": null or {
+    "flights": [{"airline": "airline name", "route": "origin → destination", "milesUsed": "e.g. 50,000 miles", "class": "Economy/Business/First"}],
+    "hotels": [{"name": "hotel name", "chain": "chain name or program", "pointsUsed": "e.g. 30,000 pts", "nights": 3, "location": "area/neighborhood", "whyChosen": "brief reason"}],
+    "nights": 5,
+    "itinerary": [{"day": 1, "title": "Day 1: brief title", "highlights": ["activity or place", "meal or tip"]}],
+    "tips": ["practical tip mentioned in source", "another tip"],
+    "restaurants": [{"name": "restaurant name", "note": "what's recommended or why mentioned"}]
   }
 }
 
 IMPORTANT: "sections" must have 2-4 substantive sections. Each section "content" must be detailed — at least 3 paragraphs. This is a WIKI, not a summary.
 ${comments && comments.length ? '\nFor "expertComments": include only the insights that genuinely add value or correct errors. Empty array if none qualify.' : ''}
 ${links && links.length ? '\nFor "references": include EVERY link from the LINKS list above (substantive ones the article actually references). Skip only obvious navigation.\nIMPORTANT: Body prose (overview, sections, keyFacts, keyPoints) must be plain text — NO [text](URL) markdown syntax anywhere in body fields.' : ''}
+
+For "travelDetails": If category is "Travel" AND the content describes an actual trip or journey (not just general travel advice), extract all available travel specifics — flights (airline, miles/points used, class), hotels (chain, points used, nights, location, reason), day-by-day itinerary, practical tips, and restaurant mentions. Set to null for non-travel content or general travel guides with no trip account.
 
 FINAL CHECK BEFORE RETURNING: Re-read the LANGUAGE RULE at the top. Every "heading", "overview", "content", "keyFacts" item, "keyPoints" item, and "expertComments" item MUST be in the required language. Do NOT mix languages in reader-facing fields.
 
@@ -1206,6 +1243,40 @@ Return ONLY valid JSON. No markdown, no code fences, no explanation.`;
         throw new Error('Gemini returned invalid JSON twice.\nFirst output ended: "' + (text || '').slice(-120) + '"\nRetry output ended: "' + (text2 || '').slice(-120) + '"\nThe article may be too long — try a shorter one.');
       }
     }
+  },
+
+  async detectContradictions(existingText, newAnalysis) {
+    if (!existingText || existingText.length < 80) return [];
+    const summary = [
+      newAnalysis.overview || '',
+      (newAnalysis.keyFacts || []).slice(0, 8).join(' | '),
+      (newAnalysis.keyPoints || []).slice(0, 6).join(' | ')
+    ].filter(Boolean).join('\n').slice(0, 2000);
+    const prompt = `You are a fact-checker comparing an existing wiki entry with newly ingested content.
+
+EXISTING WIKI CONTENT:
+${existingText.slice(0, 3000)}
+
+NEW CONTENT SUMMARY:
+${summary}
+
+List ONLY clear factual contradictions or significantly outdated facts (not minor wording differences, not new info that simply adds to existing).
+Return JSON: {"contradictions":[{"existing":"exact old claim","updated":"what new source says","type":"factual_conflict|outdated_info|significant_update"}]}
+If no clear contradictions: {"contradictions":[]}`;
+
+    const url = this.BASE + this.MODEL + ':generateContent?key=' + S.geminiKey;
+    const body = {
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { responseMimeType: 'application/json', temperature: 0.1, maxOutputTokens: 1024 }
+    };
+    try {
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (!res.ok) return [];
+      const data = await res.json();
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      const parsed = JSON.parse(text || '{}');
+      return Array.isArray(parsed.contradictions) ? parsed.contradictions : [];
+    } catch { return []; }  // silent fail — never block the main save flow
   },
 
   buildUrlParts(text, cats, comments, lang, links) {
@@ -1463,6 +1534,43 @@ function buildWikiBlocks(analysis, version, date, sources, archived) {
     analysis.expertComments.forEach(c => blk.push(li(c)));
   }
 
+  // Travel Details — flights, hotels, itinerary, tips, restaurants
+  if (analysis.travelDetails) {
+    const td = analysis.travelDetails;
+    if (td.flights && td.flights.length > 0) {
+      blk.push(h2('✈️ Flights'));
+      td.flights.forEach(f => {
+        const parts = [f.airline, f.route, f.milesUsed, f.class].filter(Boolean);
+        blk.push(li(parts.join(' · ')));
+      });
+    }
+    if (td.hotels && td.hotels.length > 0) {
+      blk.push(h2('🏨 Hotels'));
+      td.hotels.forEach(h => {
+        const parts = [h.name, h.chain, h.pointsUsed, h.nights ? h.nights + ' nights' : null, h.location].filter(Boolean);
+        const line = parts.join(' · ') + (h.whyChosen ? ' — ' + h.whyChosen : '');
+        blk.push(li(line));
+      });
+    }
+    if (td.itinerary && td.itinerary.length > 0) {
+      const nightsLabel = td.nights ? ' (' + td.nights + ' nights)' : '';
+      blk.push(h2('📅 Itinerary' + nightsLabel));
+      td.itinerary.forEach(day => {
+        const title = day.title || ('Day ' + day.day);
+        const acts = day.highlights && day.highlights.length ? ': ' + day.highlights.join(', ') : '';
+        blk.push(li(title + acts));
+      });
+    }
+    if (td.tips && td.tips.length > 0) {
+      blk.push(h2('💡 Tips'));
+      td.tips.forEach(t => blk.push(li(t)));
+    }
+    if (td.restaurants && td.restaurants.length > 0) {
+      blk.push(h2('🍽️ Restaurants'));
+      td.restaurants.forEach(r => blk.push(li(r.name + (r.note ? ' — ' + r.note : ''))));
+    }
+  }
+
   // References — render as "title — url" plain text (Notion auto-linkifies URLs)
   if (analysis.references && analysis.references.length > 0) {
     const refs = analysis.references.filter(r => r && r.url);
@@ -1662,11 +1770,22 @@ const W = {
         }
       }
 
+      // ── LINT: detect contradictions (only when updating an existing page, never blocks save) ──
+      let contradictions = [];
+      if (existingTopic) {
+        const existingText = (existingTopic.blocks || [])
+          .filter(b => b.type === 'paragraph' || b.type === 'bulleted_list_item' || b.type === 'heading_2' || b.type === 'heading_3')
+          .map(b => (b[b.type]?.rich_text || []).map(t => t.plain_text || t.text?.content || '').join(''))
+          .filter(Boolean).join('\n');
+        contradictions = await G.detectContradictions(existingText, analysis);
+      }
+
       this._state = {
         analysis, sourceUrl, sourceTitle, existingCats,
         existingCategoryId, existingTopic, newVersion,
         isNew: !existingTopic, date: today(), type,
-        useEvolution: true  // default: accept AI evolution suggestion if present
+        useEvolution: true,
+        contradictions
       };
 
       UI.showPreview(this._state);
@@ -2047,6 +2166,26 @@ const UI = {
     } else {
       evoPanel.classList.remove('visible');
     }
+
+    // Lint panel
+    const lintPanel = this.$('lint-panel');
+    const contradictions = state.contradictions || [];
+    if (contradictions.length > 0) {
+      this.$('lint-title').textContent = contradictions.length + ' contradiction' + (contradictions.length > 1 ? 's' : '') + ' detected';
+      const itemsEl = this.$('lint-items');
+      itemsEl.innerHTML = '';
+      contradictions.forEach(c => {
+        const div = document.createElement('div');
+        div.className = 'lint-item';
+        div.innerHTML =
+          '<div class="lint-label">Existing</div><div class="lint-old">' + String(c.existing || '').slice(0, 200) + '</div>' +
+          '<div class="lint-label" style="margin-top:6px">New</div><div class="lint-new">' + String(c.updated || '').slice(0, 200) + '</div>';
+        itemsEl.appendChild(div);
+      });
+      lintPanel.classList.add('visible');
+    } else {
+      lintPanel.classList.remove('visible');
+    }
   },
 
   refreshPreviewPath(state) {
@@ -2086,6 +2225,7 @@ const UI = {
     this.$('preview').classList.remove('visible');
     this.$('cat-edit').classList.remove('visible');
     this.$('evolution-panel').classList.remove('visible');
+    this.$('lint-panel').classList.remove('visible');
   },
 
   // ── ACTIVITY ──
