@@ -664,7 +664,7 @@
 <!-- ── JAVASCRIPT ─────────────────────────────── -->
 <script>
 'use strict';
-const APP_VERSION = '1.5.5';
+const APP_VERSION = '1.5.6';
 document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
 // ─── FIREBASE CONFIG STORE ────────────────────────────────────────────────────
@@ -1063,14 +1063,25 @@ const G = {
 
     let catSection = '';
     if (existingCats && existingCats.length) {
-      catSection = '\n\nCurrent wiki structure:\n' +
-        existingCats.map(c =>
-          `- ${c.name} (${c.topics.length} pages${c.topics.length ? ': ' + c.topics.slice(0,6).join(', ') : ''})`
-        ).join('\n') +
-        '\n\nCategory guidance:\n' +
-        '• Fits existing category → categoryStatus: "existing"\n' +
-        '• New territory → categoryStatus: "new"\n' +
-        '• Existing category grown too broad (4+ topics) → categoryStatus: "evolved" (suggest sparingly)\n' +
+      catSection = '\n\nCURRENT WIKI STRUCTURE (existing categories → existing subcategory pages):\n' +
+        existingCats.map(c => {
+          if (!c.topics.length) return `- ${c.name} (empty — no pages yet)`;
+          const titles = c.topics.slice(0, 20).map(t => '"' + t.title + '"').join(', ');
+          const more = c.topics.length > 20 ? ` … +${c.topics.length - 20} more` : '';
+          return `- ${c.name}:\n    pages: ${titles}${more}`;
+        }).join('\n') +
+        '\n\n🚨 SUBCATEGORY REUSE RULE (CRITICAL for wiki compounding):\n' +
+        '• If the new content overlaps with an EXISTING subcategory above (same topic / same domain),\n' +
+        '  you MUST reuse that EXACT subcategory name VERBATIM (copy-paste from the list above).\n' +
+        '• Example: existing "ACT Prep Guide" + new article on ACT/SAT/test prep → use "ACT Prep Guide" (NOT "ACT Study Resources", NOT "ACT Tips", NOT a variant).\n' +
+        '• Example: existing "Mexico City" + new article about CDMX → use "Mexico City" (NOT "CDMX Travel Guide").\n' +
+        '• The goal is COMPOUND KNOWLEDGE — one topic = one page that accumulates info over time.\n' +
+        '• Only create a NEW subcategory if the topic is genuinely distinct from every existing one.\n\n' +
+        'Category status guidance:\n' +
+        '• Fits existing category + reuses existing subcategory → categoryStatus: "existing"\n' +
+        '• Fits existing category but truly new subcategory → categoryStatus: "existing" (new page under existing cat)\n' +
+        '• Entirely new territory → categoryStatus: "new"\n' +
+        '• Existing category grown too broad (4+ topics) → categoryStatus: "evolved" (use sparingly)\n' +
         '• For "evolved": put new name in "category", explain in "evolutionSuggestion"';
     } else {
       catSection = '\n\nThis wiki has no existing categories yet. Set categoryStatus: "new".';
@@ -1616,7 +1627,33 @@ const W = {
       const existingCategoryId = catMatch?.rawId || null;
 
       if (catMatch) {
-        const topicMatch = catMatch.topics.find(t => t.title.toLowerCase() === analysis.subcategory.toLowerCase());
+        // 1. Exact match first
+        let topicMatch = catMatch.topics.find(t => t.title.toLowerCase() === analysis.subcategory.toLowerCase());
+
+        // 2. Fuzzy match safety net — Gemini may produce slight variants of existing subcategory
+        if (!topicMatch && catMatch.topics.length > 0) {
+          const sugg = analysis.subcategory.toLowerCase();
+          const suggTokens = new Set(sugg.split(/[\s\-_]+/).filter(t => t.length >= 3));
+          let best = null, bestScore = 0;
+          for (const t of catMatch.topics) {
+            const titleTokens = new Set(t.title.toLowerCase().split(/[\s\-_]+/).filter(s => s.length >= 3));
+            const intersection = [...suggTokens].filter(x => titleTokens.has(x)).length;
+            const union = new Set([...suggTokens, ...titleTokens]).size;
+            const jaccard = union > 0 ? intersection / union : 0;
+            // Containment: one is subset of the other (e.g. "ACT Prep" ⊂ "ACT Prep Guide")
+            const minSize = Math.min(suggTokens.size, titleTokens.size);
+            const contain = minSize > 0 ? intersection / minSize : 0;
+            const score = Math.max(jaccard, contain * 0.85);
+            if (score > bestScore && score >= 0.5) { bestScore = score; best = t; }
+          }
+          if (best) {
+            console.log('[wiki] Fuzzy matched subcategory "' + analysis.subcategory + '" → existing "' + best.title + '" (score ' + bestScore.toFixed(2) + ')');
+            topicMatch = best;
+            // Override Gemini's variant with the existing canonical name (compound knowledge)
+            analysis.subcategory = best.title;
+          }
+        }
+
         if (topicMatch) {
           const blocks = await N.pageBlocks(topicMatch.rawId);
           const content = extractPageContent(blocks);
