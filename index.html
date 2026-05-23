@@ -642,7 +642,7 @@
 <!-- ── JAVASCRIPT ─────────────────────────────── -->
 <script>
 'use strict';
-const APP_VERSION = '1.4.1';
+const APP_VERSION = '1.4.2';
 document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
 // ─── FIREBASE CONFIG STORE ────────────────────────────────────────────────────
@@ -808,41 +808,44 @@ const F = {
   findArticleBody(html) {
     const d = document.createElement('div');
     d.innerHTML = html;
-    // Strip global non-content first
+    // Strip semantic non-content only (conservative — wrong class match could nuke body)
     d.querySelectorAll('script,style,nav,header,footer,aside,iframe,noscript,[role=navigation],[role=banner],[role=complementary]')
       .forEach(el => el.remove());
-    // Also strip common sidebar/widget class names that wrap nav menus
-    d.querySelectorAll('[class*="sidebar"],[class*="widget"],[class*="menu"],[class*="gnb"],[class*="lnb"],[id*="sidebar"],[id*="menu"]')
-      .forEach(el => el.remove());
 
-    // Try selectors in priority order — among matches, pick the one with longest text
+    // Score each candidate by text length AND link density (article = lots of text per link)
     const selectors = [
-      // XpressEngine / Korean CMS (milemoa.com etc.) — more specific first
+      // XpressEngine specific containers
       '.rd_doc', '.rd_body', '.read_body', '.document_content', '.rd_doc_content',
       // Semantic HTML5
       'article', '[role=article]', '[itemprop=articleBody]',
       // Blog/CMS conventions
       '.post-content', '.entry-content', '.article-content', '.post-body',
       '.article__body', '.story-body', '.post__content',
-      // XpressEngine generic content (may match multiple — pick longest)
+      // XpressEngine generic content (may match multiple — score them all)
       '.xe_content',
       // Generic fallbacks
       'main', '[role=main]',
     ];
-    let best = null, bestLen = 0, bestSel = '';
+    const candidates = [];
     for (const sel of selectors) {
-      const matches = d.querySelectorAll(sel);
-      for (const el of matches) {
-        const len = (el.textContent || '').replace(/\s+/g, ' ').trim().length;
-        if (len > 500 && len > bestLen) {
-          best = el; bestLen = len; bestSel = sel;
-        }
-      }
-      // If we found a hit on a more specific selector, prefer it over generic ones
-      if (best && bestLen > 1500) break;
+      d.querySelectorAll(sel).forEach(el => {
+        const txtLen = (el.textContent || '').replace(/\s+/g, ' ').trim().length;
+        if (txtLen < 300) return;
+        const linkCount = el.querySelectorAll('a[href]').length;
+        // Score: prefer high text, low link-density. Sidebar = many links per char; article = few.
+        const density = linkCount / Math.max(txtLen, 1);
+        // Score formula: text length penalized by link density
+        const score = txtLen * (1 - Math.min(density * 100, 0.9));
+        candidates.push({ el, sel, txtLen, linkCount, density: density.toFixed(4), score });
+      });
     }
-    console.log('[wiki] findArticleBody: selector="' + bestSel + '", text length=' + bestLen);
-    return best || d.body || d;
+    candidates.sort((a, b) => b.score - a.score);
+    console.log('[wiki] findArticleBody candidates:', candidates.slice(0, 5).map(c =>
+      `${c.sel} (text=${c.txtLen}, links=${c.linkCount}, density=${c.density}, score=${Math.round(c.score)})`).join(' | '));
+
+    if (candidates.length > 0) return candidates[0].el;
+    console.warn('[wiki] findArticleBody: no candidate found, falling back to <body>');
+    return d.body || d;
   },
 
   // Convert a DOM element to plain text with <a> tags replaced by [text](url)
@@ -872,7 +875,7 @@ const F = {
     let baseHost = '';
     try { baseHost = new URL(baseUrl).hostname; } catch {}
 
-    let rejected = 0, kept = 0;
+    const rejects = []; // diagnostic
     bodyEl.querySelectorAll('a[href]').forEach(a => {
       let href = a.getAttribute('href');
       if (!href || href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('mailto:')) return;
@@ -881,45 +884,45 @@ const F = {
       if (href === baseUrl) return;
       if (seen.has(href)) return;
 
-      // Skip same-domain navigation/category links
-      try {
-        const u = new URL(href);
-        if (u.hostname === baseHost) {
-          const path = u.pathname + u.search;
-          const navUrlPatterns = [
-            /^\/?$/, /\/board\/?$/, /\/list\b/, /\/category\b/, /\/index\.php$/,
-            /[?&](mid|cat|category|board|act|page|page_no|search_target|search_keyword)=/,
-            /\/login/, /\/signup/, /\/register/, /\/member\//, /\/profile\//,
-            /\/help/, /\/about/, /\/policy/, /\/terms/, /\/contact/, /\/rss/,
-          ];
-          if (navUrlPatterns.some(p => p.test(path))) { rejected++; return; }
-        }
-      } catch { return; }
-
       let text = (a.textContent || '').replace(/\s+/g, ' ').trim();
       if (!text || text.length < 2) {
         const img = a.querySelector('img');
         text = img ? (img.alt || '').trim() : '';
       }
-      if (!text || text.length < 4 || text.length > 200) { rejected++; return; }
+      if (!text || text.length > 200) { rejects.push(['too-long-or-empty', text]); return; }
 
-      // Reject nav-style anchor text (Korean + English common nav)
-      const navTexts = ['전체', '더보기', '목록', '이전', '다음', '처음', '마지막', '글쓰기', '댓글', '추천', '신고', '신청', '취소',
-        '로그인', '회원가입', '마이페이지', '검색', '공지',
+      // Reject pure nav text (exact match only, length-agnostic)
+      const navTexts = ['전체', '더보기', '목록', '이전', '다음', '처음', '마지막', '글쓰기', '댓글', '추천', '신고',
+        '로그인', '회원가입', '마이페이지', '검색', '공지', '홈',
         'Home', 'Login', 'Sign up', 'Sign in', 'Register', 'Subscribe', 'Search', 'Menu', 'Next', 'Previous', 'More'];
-      if (navTexts.includes(text)) { rejected++; return; }
+      if (navTexts.includes(text)) { rejects.push(['nav-text', text]); return; }
       // Reject pure numbers
-      if (/^\d+$/.test(text)) { rejected++; return; }
-      // Reject "Category Name 1234" / "Cat-Sub 1234" (Korean OR English) — forum board listings
-      if (/^[가-힯A-Za-z][가-힯A-Za-z0-9\-_·]{0,18}(\s*-\s*[가-힯A-Za-z][가-힯A-Za-z0-9\-_·]{0,15}){0,3}\s+\d{1,7}$/.test(text)) { rejected++; return; }
-      // Reject "Text(123)" / "Text [123]" pagination/count badges
-      if (/^.{1,30}\s*[\(\[]\d+[\)\]]\s*$/.test(text)) { rejected++; return; }
+      if (/^\d+$/.test(text)) { rejects.push(['number-only', text]); return; }
+      // Reject "Category Name 1234" pattern: short word(s) + space + 1-7 digit number AT END
+      // Examples to reject: "후기 7538", "후기-카드 1930", "Tech 42"
+      // Examples to keep: "Article posted in 2024", "iPhone 15 Pro" (no space-then-number-only-at-end), "Win $1000 prize"
+      if (/^[가-힯A-Za-z][가-힯A-Za-z0-9\-_·]{0,20}\s+\d{1,7}$/.test(text)) { rejects.push(['cat-count', text]); return; }
+      // Reject same-domain nav URLs
+      try {
+        const u = new URL(href);
+        if (u.hostname === baseHost) {
+          const path = u.pathname + u.search;
+          const navUrlPatterns = [
+            /^\/?$/, /\/list\b/, /\/category\b/, /\/index\.php$/,
+            /[?&](mid|cat|category|act=disp|page=\d|search_target|search_keyword)=/,
+            /\/login/, /\/signup/, /\/register/, /\/member\//, /\/profile\//,
+            /\/policy/, /\/terms/, /\/rss/,
+          ];
+          if (navUrlPatterns.some(p => p.test(path))) { rejects.push(['nav-url', text + ' → ' + path]); return; }
+        }
+      } catch { return; }
 
       seen.add(href);
-      kept++;
       links.push({ text: text.slice(0, 200), href });
     });
-    console.log('[wiki] extractLinks: kept=' + kept + ', rejected=' + rejected + ', baseHost=' + baseHost);
+    console.log('[wiki] extractLinks: kept=' + links.length + ', rejected=' + rejects.length + ', baseHost=' + baseHost);
+    if (rejects.length > 0) console.log('[wiki] extractLinks rejected samples:', rejects.slice(0, 8));
+    if (links.length > 0) console.log('[wiki] extractLinks kept samples:', links.slice(0, 8).map(l => l.text + ' → ' + l.href));
     return links.slice(0, 40);
   },
 
