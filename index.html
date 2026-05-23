@@ -642,7 +642,7 @@
 <!-- ── JAVASCRIPT ─────────────────────────────── -->
 <script>
 'use strict';
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.5.1';
 document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
 // ─── FIREBASE CONFIG STORE ────────────────────────────────────────────────────
@@ -1328,8 +1328,41 @@ function injectLinks(text, links) {
   return result;
 }
 
+// Validate a URL is acceptable for Notion's link annotation.
+// Rejects: non-string, empty/too-long, non-http(s), no hostname/dot, whitespace.
+function isValidNotionUrl(url) { return _validateNotionUrl(url); }
+function _validateNotionUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  if (trimmed.length < 8 || trimmed.length > 2000) return false;
+  if (trimmed.indexOf(' ') >= 0) return false;
+  if (trimmed.indexOf('\t') >= 0 || trimmed.indexOf('\n') >= 0) return false;
+  try {
+    const u = new URL(trimmed);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+    if (!u.hostname || u.hostname.length < 3 || !u.hostname.includes('.')) return false;
+    return true;
+  } catch { return false; }
+}
+function _OLD_isValidNotionUrl_unused(url) {
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  if (trimmed.length < 8 || trimmed.length > 2000) return false;
+  // Whitespace and control chars are invalid in URLs
+  if (/[\s -]/.test(trimmed)) return false;
+  try {
+    const u = new URL(trimmed);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+    if (!u.hostname || u.hostname.length < 3 || !u.hostname.includes('.')) return false;
+    // Reject URLs with whitespace or control characters in any part
+    if (/[\s -]/.test(trimmed)) return false;
+    return true;
+  } catch { return false; }
+}
+
 // Parse [text](url) markdown into Notion rich_text segments (plain + linked).
 // Each segment's content is capped at 1999 chars (Notion limit).
+// If a URL fails validation, the link is rendered as plain text fallback.
 function richTextFromMarkdown(text) {
   const src = String(text || '');
   const parts = [];
@@ -1344,7 +1377,13 @@ function richTextFromMarkdown(text) {
   };
   while ((m = re.exec(src)) !== null) {
     if (m.index > last) push(src.slice(last, m.index), null);
-    push(m[1], m[2]);
+    const anchor = m[1], url = m[2];
+    if (isValidNotionUrl(url)) {
+      push(anchor, url);
+    } else {
+      console.warn('[wiki] Dropping invalid URL in content:', url);
+      push(anchor, null); // render anchor text without link
+    }
     last = m.index + m[0].length;
   }
   if (last < src.length) push(src.slice(last), null);
@@ -1400,20 +1439,23 @@ function buildWikiBlocks(analysis, version, date, sources, archived) {
 
   // References — every clickable link from the original article
   if (analysis.references && analysis.references.length > 0) {
-    blk.push(h2('References'));
-    analysis.references.forEach(r => {
-      if (r && r.url) {
+    const validRefs = analysis.references.filter(r => r && r.url && isValidNotionUrl(r.url));
+    const invalidRefs = analysis.references.filter(r => r && r.url && !isValidNotionUrl(r.url));
+    if (invalidRefs.length > 0) console.warn('[wiki] Dropping invalid reference URLs:', invalidRefs.map(r => r.url));
+    if (validRefs.length > 0) {
+      blk.push(h2('References'));
+      validRefs.forEach(r => {
         blk.push({ object:'block', type:'bulleted_list_item',
           bulleted_list_item:{ rich_text:[
             { type:'text', text:{ content: String(r.title || r.url).slice(0,200), link:{ url: r.url } } }
           ]} });
-      }
-    });
+      });
+    }
   }
 
   blk.push(h2('Sources Ingested'));
   sources.forEach(src => {
-    if (src.url) {
+    if (src.url && isValidNotionUrl(src.url)) {
       blk.push({ object:'block', type:'bulleted_list_item',
         bulleted_list_item:{ rich_text:[
           { type:'text', text:{ content:'[' + src.date + '] ' } },
