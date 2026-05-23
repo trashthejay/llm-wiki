@@ -691,7 +691,7 @@
 <!-- ── JAVASCRIPT ─────────────────────────────── -->
 <script>
 'use strict';
-const APP_VERSION = '1.5.8';
+const APP_VERSION = '1.5.9';
 document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
 // ─── FIREBASE CONFIG STORE ────────────────────────────────────────────────────
@@ -1146,6 +1146,7 @@ Return a JSON object with EXACTLY these fields:
   "category": "1-2 word primary category (ENGLISH only) — Travel / Tech / Health / Finance / Food / Work / Personal / Science / Culture",
   "subcategory": "1-3 word page title (ENGLISH only) — becomes the Notion page name",
   "sourceTitle": "title of the source (ENGLISH only)",
+  "sourcePublishDate": "YYYY-MM-DD or null — the date this source was originally published/posted (look for article date, post timestamp, dateline, or earliest comment date in the content). NOT today's date. Null only if truly nothing date-like found.",
   "overview": "2-3 thorough paragraphs introducing this topic: what it is, why it matters, key context. Be comprehensive. (Language: follow LANGUAGE RULE above)",
   "sections": [
     {
@@ -1245,14 +1246,28 @@ Return ONLY valid JSON. No markdown, no code fences, no explanation.`;
     }
   },
 
-  async detectContradictions(existingText, newAnalysis) {
+  async detectContradictions(existingText, newAnalysis, existingDate, newSourceDate) {
     if (!existingText || existingText.length < 80) return [];
     const summary = [
       newAnalysis.overview || '',
       (newAnalysis.keyFacts || []).slice(0, 8).join(' | '),
       (newAnalysis.keyPoints || []).slice(0, 6).join(' | ')
     ].filter(Boolean).join('\n').slice(0, 2000);
+
+    // Temporal context — which side is actually newer in real-world time?
+    let temporalNote = '';
+    if (existingDate && newSourceDate) {
+      const cmp = newSourceDate.localeCompare(existingDate);
+      if (cmp > 0)       temporalNote = `TEMPORAL CONTEXT: New source (${newSourceDate}) is NEWER than existing wiki (${existingDate}). New info is likely more current.`;
+      else if (cmp < 0)  temporalNote = `TEMPORAL CONTEXT: ⚠️ New source (${newSourceDate}) is OLDER than existing wiki (${existingDate}). Existing wiki info is likely more current — flag any conflicts where the existing version may be the correct/newer truth.`;
+      else               temporalNote = `TEMPORAL CONTEXT: Both dated ${existingDate}.`;
+    } else if (existingDate && !newSourceDate) {
+      temporalNote = `TEMPORAL CONTEXT: Existing wiki dated ${existingDate}. New source has no clear publication date — recency uncertain.`;
+    }
+
     const prompt = `You are a fact-checker comparing an existing wiki entry with newly ingested content.
+
+${temporalNote}
 
 EXISTING WIKI CONTENT:
 ${existingText.slice(0, 3000)}
@@ -1261,7 +1276,8 @@ NEW CONTENT SUMMARY:
 ${summary}
 
 List ONLY clear factual contradictions or significantly outdated facts (not minor wording differences, not new info that simply adds to existing).
-Return JSON: {"contradictions":[{"existing":"exact old claim","updated":"what new source says","type":"factual_conflict|outdated_info|significant_update"}]}
+For each contradiction, set "newerSide" to which version is more recent based on TEMPORAL CONTEXT above ("existing" | "new" | "unknown").
+Return JSON: {"contradictions":[{"existing":"exact old claim","updated":"what new source says","type":"factual_conflict|outdated_info|significant_update","newerSide":"existing|new|unknown"}]}
 If no clear contradictions: {"contradictions":[]}`;
 
     const url = this.BASE + this.MODEL + ':generateContent?key=' + S.geminiKey;
@@ -1772,12 +1788,16 @@ const W = {
 
       // ── LINT: detect contradictions (only when updating an existing page, never blocks save) ──
       let contradictions = [];
+      let lintDates = null;
       if (existingTopic) {
         const existingText = (existingTopic.blocks || [])
           .filter(b => b.type === 'paragraph' || b.type === 'bulleted_list_item' || b.type === 'heading_2' || b.type === 'heading_3')
           .map(b => (b[b.type]?.rich_text || []).map(t => t.plain_text || t.text?.content || '').join(''))
           .filter(Boolean).join('\n');
-        contradictions = await G.detectContradictions(existingText, analysis);
+        const existingDate = existingTopic.content?.date || null;
+        const newSourceDate = analysis.sourcePublishDate || null;
+        lintDates = { existingDate, newSourceDate };
+        contradictions = await G.detectContradictions(existingText, analysis, existingDate, newSourceDate);
       }
 
       this._state = {
@@ -1785,7 +1805,8 @@ const W = {
         existingCategoryId, existingTopic, newVersion,
         isNew: !existingTopic, date: today(), type,
         useEvolution: true,
-        contradictions
+        contradictions,
+        lintDates
       };
 
       UI.showPreview(this._state);
@@ -2174,12 +2195,42 @@ const UI = {
       this.$('lint-title').textContent = contradictions.length + ' contradiction' + (contradictions.length > 1 ? 's' : '') + ' detected';
       const itemsEl = this.$('lint-items');
       itemsEl.innerHTML = '';
+
+      // Temporal banner — warn if new source is OLDER than existing wiki
+      const d = state.lintDates || {};
+      if (d.existingDate && d.newSourceDate) {
+        const cmp = d.newSourceDate.localeCompare(d.existingDate);
+        const banner = document.createElement('div');
+        banner.className = 'lint-item';
+        if (cmp < 0) {
+          banner.style.borderColor = '#ef4444';
+          banner.innerHTML = '<div class="lint-label" style="color:#ef4444">⚠️ New source is OLDER than existing wiki</div>' +
+            '<div style="font-size:12px;margin-top:4px">New source date: <b>' + d.newSourceDate + '</b> · Existing wiki date: <b>' + d.existingDate + '</b><br>The existing wiki info may be more current. Review carefully before confirming.</div>';
+        } else if (cmp > 0) {
+          banner.innerHTML = '<div class="lint-label">📅 New source is newer</div>' +
+            '<div style="font-size:12px;margin-top:4px">New source: <b>' + d.newSourceDate + '</b> · Existing wiki: <b>' + d.existingDate + '</b></div>';
+        } else {
+          banner.innerHTML = '<div class="lint-label">📅 Same date as existing</div>' +
+            '<div style="font-size:12px;margin-top:4px">Both dated <b>' + d.existingDate + '</b></div>';
+        }
+        itemsEl.appendChild(banner);
+      } else if (d.existingDate && !d.newSourceDate) {
+        const banner = document.createElement('div');
+        banner.className = 'lint-item';
+        banner.innerHTML = '<div class="lint-label">📅 Source date unknown</div>' +
+          '<div style="font-size:12px;margin-top:4px">Existing wiki dated <b>' + d.existingDate + '</b> · New source has no clear publication date.</div>';
+        itemsEl.appendChild(banner);
+      }
+
       contradictions.forEach(c => {
         const div = document.createElement('div');
         div.className = 'lint-item';
+        const newerBadge =
+          c.newerSide === 'existing' ? ' <span style="background:#7c5200;color:#fff;padding:1px 6px;border-radius:4px;font-size:10px">existing is newer</span>' :
+          c.newerSide === 'new'      ? ' <span style="background:#166534;color:#fff;padding:1px 6px;border-radius:4px;font-size:10px">new is newer</span>' : '';
         div.innerHTML =
-          '<div class="lint-label">Existing</div><div class="lint-old">' + String(c.existing || '').slice(0, 200) + '</div>' +
-          '<div class="lint-label" style="margin-top:6px">New</div><div class="lint-new">' + String(c.updated || '').slice(0, 200) + '</div>';
+          '<div class="lint-label">Existing' + (c.newerSide === 'existing' ? newerBadge : '') + '</div><div class="lint-old">' + String(c.existing || '').slice(0, 200) + '</div>' +
+          '<div class="lint-label" style="margin-top:6px">New' + (c.newerSide === 'new' ? newerBadge : '') + '</div><div class="lint-new">' + String(c.updated || '').slice(0, 200) + '</div>';
         itemsEl.appendChild(div);
       });
       lintPanel.classList.add('visible');
