@@ -641,7 +641,7 @@
 <!-- ── JAVASCRIPT ─────────────────────────────── -->
 <script>
 'use strict';
-const APP_VERSION = '1.5.2';
+const APP_VERSION = '1.5.3';
 document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
 // ─── FIREBASE CONFIG STORE ────────────────────────────────────────────────────
@@ -1343,7 +1343,7 @@ function _validateNotionUrl(url) {
     return true;
   } catch { return false; }
 }
-function _OLD_isValidNotionUrl_unused(url) {
+function _OLD_isValidNotionUrl_unused_removed(url) { return false; /* dead code removed below */ } /*
   if (!url || typeof url !== 'string') return false;
   const trimmed = url.trim();
   if (trimmed.length < 8 || trimmed.length > 2000) return false;
@@ -1358,35 +1358,21 @@ function _OLD_isValidNotionUrl_unused(url) {
     return true;
   } catch { return false; }
 }
+*/
 
-// Parse [text](url) markdown into Notion rich_text segments (plain + linked).
-// Each segment's content is capped at 1999 chars (Notion limit).
-// If a URL fails validation, the link is rendered as plain text fallback.
+// Convert [text](url) markdown to plain text "text (url)" — Notion auto-detects
+// URLs in plain text and makes them clickable. This avoids the rich_text link
+// annotation that was rejecting some milemoa-style URLs with 400 Invalid URL.
+function markdownLinksToPlainText(text) {
+  return String(text || '').replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    function(_, anchor, url) { return anchor + ' (' + url + ')'; });
+}
+
+// Build Notion rich_text from a string — single plain text segment, no links.
+// Notion automatically linkifies http(s) URLs found inside the text content.
 function richTextFromMarkdown(text) {
-  const src = String(text || '');
-  const parts = [];
-  const re = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
-  let last = 0, m;
-  const push = (content, link) => {
-    if (!content) return;
-    const slice = content.slice(0, 1999);
-    parts.push(link
-      ? { type: 'text', text: { content: slice, link: { url: link } } }
-      : { type: 'text', text: { content: slice } });
-  };
-  while ((m = re.exec(src)) !== null) {
-    if (m.index > last) push(src.slice(last, m.index), null);
-    const anchor = m[1], url = m[2];
-    if (isValidNotionUrl(url)) {
-      push(anchor, url);
-    } else {
-      console.warn('[wiki] Dropping invalid URL in content:', url);
-      push(anchor, null); // render anchor text without link
-    }
-    last = m.index + m[0].length;
-  }
-  if (last < src.length) push(src.slice(last), null);
-  return parts.length ? parts : [{ type: 'text', text: { content: src.slice(0, 1999) } }];
+  var plain = markdownLinksToPlainText(text);
+  return [{ type: 'text', text: { content: plain.slice(0, 1999) } }];
 }
 
 // ─── BLOCK BUILDER ────────────────────────────────────────────────────────────
@@ -1436,31 +1422,22 @@ function buildWikiBlocks(analysis, version, date, sources, archived) {
     analysis.expertComments.forEach(c => blk.push(li(c)));
   }
 
-  // References — every clickable link from the original article
+  // References — render as "title — url" plain text (Notion auto-linkifies URLs)
   if (analysis.references && analysis.references.length > 0) {
-    const validRefs = analysis.references.filter(r => r && r.url && isValidNotionUrl(r.url));
-    const invalidRefs = analysis.references.filter(r => r && r.url && !isValidNotionUrl(r.url));
-    if (invalidRefs.length > 0) console.warn('[wiki] Dropping invalid reference URLs:', invalidRefs.map(r => r.url));
-    if (validRefs.length > 0) {
+    const refs = analysis.references.filter(r => r && r.url);
+    if (refs.length > 0) {
       blk.push(h2('References'));
-      validRefs.forEach(r => {
-        blk.push({ object:'block', type:'bulleted_list_item',
-          bulleted_list_item:{ rich_text:[
-            { type:'text', text:{ content: String(r.title || r.url).slice(0,200), link:{ url: r.url } } }
-          ]} });
+      refs.forEach(r => {
+        const line = (r.title ? String(r.title) + ' — ' : '') + String(r.url);
+        blk.push(li(line));
       });
     }
   }
 
   blk.push(h2('Sources Ingested'));
   sources.forEach(src => {
-    if (src.url && isValidNotionUrl(src.url)) {
-      blk.push({ object:'block', type:'bulleted_list_item',
-        bulleted_list_item:{ rich_text:[
-          { type:'text', text:{ content:'[' + src.date + '] ' } },
-          { type:'text', text:{ content: src.title.slice(0,200), link:{ url: src.url } } }
-        ]} });
-    } else blk.push(li('[' + src.date + '] ' + src.title));
+    const line = '[' + src.date + '] ' + src.title + (src.url ? ' — ' + src.url : '');
+    blk.push(li(line));
   });
 
   if (archived) {
