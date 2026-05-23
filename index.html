@@ -235,6 +235,19 @@
     .drop-zone .preview-img { max-width: 100%; max-height: 180px; border-radius: var(--radius-sm); margin-bottom: 10px; object-fit: contain; }
     #file-input { display: none; }
 
+    /* ── TEXT TAB ── */
+    .text-input {
+      width: 100%; min-height: 160px; max-height: 320px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); color: var(--text);
+      font-size: 14px; line-height: 1.6; padding: 12px 14px;
+      resize: vertical; outline: none; font-family: inherit;
+      transition: border-color 0.15s;
+    }
+    .text-input:focus { border-color: var(--accent); }
+    .text-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
+    .char-count { font-size: 12px; color: var(--muted); }
+
     /* ── PROGRESS ── */
     #progress { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; display: none; }
     #progress.visible { display: block; }
@@ -478,6 +491,7 @@
     <div class="tab-bar">
       <button class="tab active" data-tab="url">🔗 URL</button>
       <button class="tab" data-tab="screenshot">📸 Screenshot</button>
+      <button class="tab" data-tab="text">📋 텍스트</button>
     </div>
     <div class="tab-panel active" id="tab-url">
       <div class="input-row">
@@ -492,6 +506,15 @@
         <p>Tap to open your photo library or file picker</p>
       </div>
       <input type="file" id="file-input" accept="image/*" />
+    </div>
+    <div class="tab-panel" id="tab-text">
+      <textarea id="text-input" class="text-input"
+        placeholder="카톡, 문자, 메모 등 분석할 글을 붙여넣으세요… (최대 14,000자)"
+        maxlength="14000"></textarea>
+      <div class="text-footer">
+        <span class="char-count" id="char-count">0 / 14,000</span>
+        <button class="btn btn-primary" id="process-text-btn">Analyze</button>
+      </div>
     </div>
   </div>
 
@@ -641,7 +664,7 @@
 <!-- ── JAVASCRIPT ─────────────────────────────── -->
 <script>
 'use strict';
-const APP_VERSION = '1.5.4';
+const APP_VERSION = '1.5.5';
 document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
 // ─── FIREBASE CONFIG STORE ────────────────────────────────────────────────────
@@ -1490,17 +1513,24 @@ const W = {
     let existingCats = []; // [{ name, rawId, topics: [{ title, rawId }] }]
     let wikiLang = 'en'; // default English; may be overridden by lang picker
 
-    // Domain check BEFORE showProgress — picker is the first thing user sees (above fold)
+    // Language detection BEFORE showProgress — picker is the first thing user sees (above fold)
     if (type === 'url' && isKoreanDomain(source)) {
       wikiLang = await UI.showLangPicker();
     }
+    if (type === 'text' && isKoreanContent(source, '')) {
+      wikiLang = await UI.showLangPicker();
+    }
 
-    UI.showProgress(['Fetching content', 'Loading wiki structure', 'AI analysis']);
+    UI.showProgress(
+      type === 'text'  ? ['Processing text',  'Loading wiki structure', 'AI analysis'] :
+                         ['Fetching content', 'Loading wiki structure', 'AI analysis']
+    );
 
     try {
-      // Step 1 — fetch content
-      UI.setStep(0, 'active'); UI.setLabel('Fetching content…');
+      // Step 1 — fetch / prepare content
+      UI.setStep(0, 'active');
       if (type === 'url') {
+        UI.setLabel('Fetching content…');
         let fetched;
         try { fetched = await F.fetchUrl(source); }
         catch (e) { throw new Error('Step 1 (Fetching content) failed\n\n' + e.message); }
@@ -1513,6 +1543,12 @@ const W = {
           UI.showProgress(['Fetching content', 'Loading wiki structure', 'AI analysis']);
           UI.setStep(0, 'done');
         }
+      } else if (type === 'text') {
+        UI.setLabel('Processing text…');
+        contentText = source.slice(0, 14000);
+        sourceUrl   = '';
+        sourceTitle = ''; // Gemini sets this from content
+        links = F.extractLinksFromText(contentText, '');
       }
       UI.setStep(0, 'done');
 
@@ -1566,7 +1602,8 @@ const W = {
         }
       }
 
-      sourceTitle = analysis.sourceTitle || (type === 'url' ? new URL(sourceUrl).hostname : 'Screenshot');
+      sourceTitle = analysis.sourceTitle ||
+        (type === 'url' ? new URL(sourceUrl).hostname : type === 'text' ? 'Pasted text' : 'Screenshot');
       UI.setStep(2, 'done');
 
       // Match existing Notion pages based on Gemini's suggestion
@@ -1815,6 +1852,13 @@ const UI = {
       const f = e.dataTransfer.files[0];
       if (f && f.type.startsWith('image/')) this.processImage(f);
     });
+
+    // 텍스트 탭 — 글자수 카운터 + Analyze 버튼
+    this.$('text-input').oninput = () => {
+      const len = this.$('text-input').value.length;
+      this.$('char-count').textContent = len.toLocaleString() + ' / 14,000';
+    };
+    this.$('process-text-btn').onclick = () => this.processText();
   },
 
   async processUrl() {
@@ -1824,6 +1868,15 @@ const UI = {
     if (!url.startsWith('http')) { this.showError('Please enter a valid URL starting with http://'); return; }
     this.hidePreview();
     await W.analyze(url, 'url');
+  },
+
+  async processText() {
+    const txt = this.$('text-input').value.trim();
+    if (!txt) { this.showToast('⚠️ 텍스트를 붙여넣어 주세요.'); return; }
+    if (txt.length < 30) { this.showToast('⚠️ 내용이 너무 짧습니다.'); return; }
+    if (!S.isConfigured()) { this.openSettings(); return; }
+    this.hidePreview();
+    await W.analyze(txt, 'text');
   },
 
   async processImage(file) {
