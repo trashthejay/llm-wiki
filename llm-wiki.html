@@ -642,7 +642,7 @@
 <!-- ── JAVASCRIPT ─────────────────────────────── -->
 <script>
 'use strict';
-const APP_VERSION = '1.4.3';
+const APP_VERSION = '1.4.4';
 document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
 // ─── FIREBASE CONFIG STORE ────────────────────────────────────────────────────
@@ -1262,6 +1262,32 @@ const N = {
   }
 };
 
+// Inject [anchor](url) markdown into plain text wherever anchor text appears
+// (used as backstop when Gemini strips the markdown markers from its output).
+function injectLinks(text, links) {
+  if (!text || typeof text !== 'string' || !links || !links.length) return text;
+  // Process longer anchor texts first so partial-match collisions don't break longer phrases
+  const sorted = [...links].sort((a, b) => (b.text || '').length - (a.text || '').length);
+  let result = text;
+  for (const link of sorted) {
+    if (!link || !link.text || !link.href) continue;
+    if (link.text.length < 3) continue; // too short — risky to match
+    const escaped = link.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Only replace if not already inside [text](url) form
+    // Use lookbehind/lookahead to skip already-linked occurrences
+    let re;
+    try { re = new RegExp('(?<!\\[)' + escaped + '(?!\\]\\()', 'g'); }
+    catch { continue; }
+    let replaced = false;
+    result = result.replace(re, m => {
+      if (replaced) return m; // only inject the FIRST occurrence per link
+      replaced = true;
+      return '[' + m + '](' + link.href + ')';
+    });
+  }
+  return result;
+}
+
 // Parse [text](url) markdown into Notion rich_text segments (plain + linked).
 // Each segment's content is capped at 1999 chars (Notion limit).
 function richTextFromMarkdown(text) {
@@ -1445,6 +1471,36 @@ const W = {
       let analysis;
       try { analysis = await G.analyze(parts); }
       catch (e) { throw new Error('Step 3 (AI analysis) failed\n\n' + e.message); }
+
+      // ── LINK SAFETY NET ──────────────────────────────────────────────
+      // Guarantee links land in Notion even if Gemini drops them
+      console.log('[wiki] Gemini returned references count:', (analysis.references || []).length, '| extracted links:', links.length);
+      if (links.length > 0) {
+        // 1. Always ensure all extracted links are in `references` (merge by URL)
+        const seenUrls = new Set((analysis.references || []).map(r => r?.url).filter(Boolean));
+        const merged = [...(analysis.references || []).filter(r => r && r.url)];
+        for (const l of links) {
+          if (!seenUrls.has(l.href)) {
+            merged.push({ title: l.text, url: l.href });
+            seenUrls.add(l.href);
+          }
+        }
+        analysis.references = merged;
+        console.log('[wiki] Final references after merge:', analysis.references.length);
+
+        // 2. Inject inline [text](url) markdown into content if Gemini stripped them
+        analysis.overview = injectLinks(analysis.overview, links);
+        if (Array.isArray(analysis.sections)) {
+          analysis.sections.forEach(s => { if (s) s.content = injectLinks(s.content, links); });
+        }
+        if (Array.isArray(analysis.keyFacts)) {
+          analysis.keyFacts = analysis.keyFacts.map(f => injectLinks(f, links));
+        }
+        if (Array.isArray(analysis.keyPoints)) {
+          analysis.keyPoints = analysis.keyPoints.map(p => injectLinks(p, links));
+        }
+      }
+
       sourceTitle = analysis.sourceTitle || (type === 'url' ? new URL(sourceUrl).hostname : 'Screenshot');
       UI.setStep(2, 'done');
 
