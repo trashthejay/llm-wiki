@@ -691,7 +691,7 @@
 <!-- ── JAVASCRIPT ─────────────────────────────── -->
 <script>
 'use strict';
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.6.1';
 document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
 // ─── FIREBASE CONFIG STORE ────────────────────────────────────────────────────
@@ -1215,7 +1215,8 @@ Return ONLY valid JSON. No markdown, no code fences, no explanation.`;
 
   async analyze(parts) {
     const url = this.BASE + this.MODEL + ':generateContent?key=' + S.geminiKey;
-    const cfg = { responseMimeType: 'application/json', temperature: 0.3, maxOutputTokens: 8192 };
+    // 32K output handles long Korean travel posts with full travel-details schema (flights/hotels/itinerary/tips)
+    const cfg = { responseMimeType: 'application/json', temperature: 0.3, maxOutputTokens: 32768 };
     const body = { contents: [{ parts }], generationConfig: cfg };
 
     const res = await this._fetchWithRetry(url, body);
@@ -1225,23 +1226,32 @@ Return ONLY valid JSON. No markdown, no code fences, no explanation.`;
     }
     const data = await res.json();
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    const finishReason = data.candidates?.[0]?.finishReason;
     if (!text) {
-      const reason = data.candidates?.[0]?.finishReason || 'no candidates';
-      throw new Error('Gemini returned no content (finishReason: ' + reason + ').\nThis often means content was blocked by safety filters or the model failed mid-generation.');
+      throw new Error('Gemini returned no content (finishReason: ' + (finishReason || 'no candidates') + ').\nThis often means content was blocked by safety filters or the model failed mid-generation.');
     }
+    // Try parse first — succeed fast in the common case
     try { return JSON.parse(text); }
     catch (parseErr) {
-      // JSON parse failed → retry once with same prompt
-      const res2 = await this._fetchWithRetry(url, body);
+      // Likely cause: output truncated (MAX_TOKENS) or generation cut off mid-JSON.
+      // Retry with a CONCISE instruction so the second attempt fits in the token budget.
+      const concisePart = { text: '\n\nIMPORTANT RETRY INSTRUCTION: Your previous attempt produced invalid/truncated JSON. Be MORE CONCISE this time — limit each "section" to 2 short paragraphs, keep "overview" to 2 short paragraphs, limit "keyFacts"/"keyPoints" to 6 items each, and ensure the JSON closes properly. Output complete valid JSON only.' };
+      const retryParts = parts.concat([concisePart]);
+      const retryBody = { contents: [{ parts: retryParts }], generationConfig: cfg };
+      const res2 = await this._fetchWithRetry(url, retryBody);
       if (!res2.ok) {
         const err = await res2.json().catch(() => ({}));
         throw new Error('Gemini parse-retry failed (HTTP ' + res2.status + ').\nFirst attempt: invalid JSON. Retry: ' + (err.error?.message || res2.status));
       }
       const data2 = await res2.json();
       const text2 = data2.candidates?.[0]?.content?.parts?.[0]?.text;
+      const finishReason2 = data2.candidates?.[0]?.finishReason;
       try { return JSON.parse(text2 || ''); }
       catch {
-        throw new Error('Gemini returned invalid JSON twice.\nFirst output ended: "' + (text || '').slice(-120) + '"\nRetry output ended: "' + (text2 || '').slice(-120) + '"\nThe article may be too long — try a shorter one.');
+        const hint = (finishReason === 'MAX_TOKENS' || finishReason2 === 'MAX_TOKENS')
+          ? 'The response hit the output token limit (article too long with full detail). Try a shorter article or remove the comments section.'
+          : 'The article may be too long — try a shorter one.';
+        throw new Error('Gemini returned invalid JSON twice.\nFirst output ended: "' + (text || '').slice(-120) + '"\nRetry output ended: "' + (text2 || '').slice(-120) + '"\n' + hint);
       }
     }
   },
