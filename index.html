@@ -642,7 +642,7 @@
 <!-- ── JAVASCRIPT ─────────────────────────────── -->
 <script>
 'use strict';
-const APP_VERSION = '1.4.4';
+const APP_VERSION = '1.5.0';
 document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
 // ─── FIREBASE CONFIG STORE ────────────────────────────────────────────────────
@@ -798,7 +798,7 @@ const F = {
     // sidebars/navigation/category lists are excluded (esp. milemoa XpressEngine)
     const bodyEl = this.findArticleBody(html);
 
-    // Convert body to text, preserving links as markdown [anchor](url)
+    // Convert body to text, preserving and discovering links as markdown [anchor](url)
     const text = this.bodyToMarkdownText(bodyEl, finalUrl);
     if (text.length < 80) throw new Error(
       'Page fetched but article body too short (' + text.length + ' chars). Body container may need a custom selector.\n\nProxy log:\n' + log.join('\n')
@@ -808,10 +808,54 @@ const F = {
     const comments = (url.includes('milemoa.com') || finalUrl.includes('milemoa.com'))
       ? this.extractMilemoaComments(html) : [];
 
-    // Extract hyperlinks ONLY from the article body, with strict nav filtering
-    const links = this.extractLinks(bodyEl, finalUrl);
+    // Parse all [text](url) markers out of the prepared body text — captures
+    // both <a> tags AND plain URLs that bodyToMarkdownText auto-linked.
+    const links = this.extractLinksFromText(text, finalUrl);
 
     return { text: text.slice(0, 14000), url: finalUrl, comments, links };
+  },
+
+  // Pull all markdown links out of body text and apply nav filters
+  extractLinksFromText(text, baseUrl) {
+    const links = [];
+    const seen = new Set();
+    let baseHost = '';
+    try { baseHost = new URL(baseUrl).hostname; } catch {}
+    const re = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const anchor = m[1].trim();
+      const href = m[2];
+      if (seen.has(href)) continue;
+      if (href === baseUrl) continue;
+      // Same-domain navigation URL patterns
+      try {
+        const u = new URL(href);
+        if (u.hostname === baseHost) {
+          const path = u.pathname + u.search;
+          const navUrlPatterns = [
+            /^\/?$/, /\/list\b/, /\/category\b/, /\/index\.php$/,
+            /[?&](mid|cat|category|act=disp|page=\d|search_target|search_keyword)=/,
+            /\/login/, /\/signup/, /\/register/, /\/member\//, /\/profile\//,
+            /\/policy/, /\/terms/, /\/rss/,
+          ];
+          if (navUrlPatterns.some(p => p.test(path))) continue;
+        }
+      } catch { continue; }
+      // Nav-text rejection
+      const navTexts = ['전체','더보기','목록','이전','다음','처음','마지막','글쓰기','댓글','추천','신고',
+        '로그인','회원가입','마이페이지','검색','공지','홈',
+        'Home','Login','Sign up','Sign in','Register','Subscribe','Search','Menu','Next','Previous','More'];
+      if (navTexts.includes(anchor)) continue;
+      if (/^\d+$/.test(anchor)) continue;
+      if (/^[가-힯A-Za-z][가-힯A-Za-z0-9\-_·]{0,20}\s+\d{1,7}$/.test(anchor)) continue;
+
+      seen.add(href);
+      links.push({ text: anchor.slice(0, 200), href });
+    }
+    console.log('[wiki] extractLinksFromText: found ' + links.length + ' links');
+    if (links.length > 0) console.log('[wiki] link samples:', links.slice(0, 8).map(l => l.text + ' → ' + l.href));
+    return links.slice(0, 40);
   },
 
   // Find the main article body container — prevents picking up sidebars/menus
@@ -858,83 +902,79 @@ const F = {
     return d.body || d;
   },
 
-  // Convert a DOM element to plain text with <a> tags replaced by [text](url)
+  // Convert article body to text + auto-link discovery.
+  // Handles three link cases:
+  //   1. <a href> tags  → [text](url)
+  //   2. URL on its own line with description above → use previous line as anchor
+  //   3. Plain inline URLs → use hostname as anchor
   bodyToMarkdownText(rootEl, baseUrl) {
     const clone = rootEl.cloneNode(true);
     clone.querySelectorAll('script,style,nav,header,footer,aside,iframe,noscript').forEach(el => el.remove());
+
+    // 1. Convert existing <a href> to markdown
     clone.querySelectorAll('a[href]').forEach(a => {
-      const text = (a.textContent || '').replace(/\s+/g, ' ').trim();
+      const t = (a.textContent || '').replace(/[\s ]+/g, ' ').trim();
       let href = a.getAttribute('href');
       try { href = new URL(href, baseUrl).href; } catch {
-        a.replaceWith(document.createTextNode(text));
-        return;
+        a.replaceWith(document.createTextNode(t)); return;
       }
-      if (text && href.startsWith('http') && text.length >= 2) {
-        a.replaceWith(document.createTextNode(`[${text}](${href})`));
+      if (t && href.startsWith('http') && t.length >= 2) {
+        a.replaceWith(document.createTextNode(' [' + t + '](' + href + ') '));
       } else {
-        a.replaceWith(document.createTextNode(text));
+        a.replaceWith(document.createTextNode(t));
       }
     });
-    return clone.textContent.replace(/\s+/g, ' ').trim();
-  },
 
-  // Extract clickable links from the article body, filtering out navigation
-  extractLinks(bodyEl, baseUrl) {
-    const links = [];
-    const seen = new Set();
-    let baseHost = '';
-    try { baseHost = new URL(baseUrl).hostname; } catch {}
+    // 2. Preserve block-level structure with newlines
+    clone.querySelectorAll('p,div,br,h1,h2,h3,h4,h5,h6,li,tr,blockquote').forEach(el => {
+      el.appendChild(document.createTextNode('\n'));
+    });
 
-    const rejects = []; // diagnostic
-    bodyEl.querySelectorAll('a[href]').forEach(a => {
-      let href = a.getAttribute('href');
-      if (!href || href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('mailto:')) return;
-      try { href = new URL(href, baseUrl).href; } catch { return; }
-      if (!href.startsWith('http')) return;
-      if (href === baseUrl) return;
-      if (seen.has(href)) return;
+    // 3. Extract text, preserve newlines, collapse intra-line spaces
+    let text = clone.textContent || '';
+    text = text.split('\n').map(l => l.replace(/[\t ]+/g, ' ').trim()).filter(l => l).join('\n');
 
-      let text = (a.textContent || '').replace(/\s+/g, ' ').trim();
-      if (!text || text.length < 2) {
-        const img = a.querySelector('img');
-        text = img ? (img.alt || '').trim() : '';
-      }
-      if (!text || text.length > 200) { rejects.push(['too-long-or-empty', text]); return; }
-
-      // Reject pure nav text (exact match only, length-agnostic)
-      const navTexts = ['전체', '더보기', '목록', '이전', '다음', '처음', '마지막', '글쓰기', '댓글', '추천', '신고',
-        '로그인', '회원가입', '마이페이지', '검색', '공지', '홈',
-        'Home', 'Login', 'Sign up', 'Sign in', 'Register', 'Subscribe', 'Search', 'Menu', 'Next', 'Previous', 'More'];
-      if (navTexts.includes(text)) { rejects.push(['nav-text', text]); return; }
-      // Reject pure numbers
-      if (/^\d+$/.test(text)) { rejects.push(['number-only', text]); return; }
-      // Reject "Category Name 1234" pattern: short word(s) + space + 1-7 digit number AT END
-      // Examples to reject: "후기 7538", "후기-카드 1930", "Tech 42"
-      // Examples to keep: "Article posted in 2024", "iPhone 15 Pro" (no space-then-number-only-at-end), "Win $1000 prize"
-      if (/^[가-힯A-Za-z][가-힯A-Za-z0-9\-_·]{0,20}\s+\d{1,7}$/.test(text)) { rejects.push(['cat-count', text]); return; }
-      // Reject same-domain nav URLs
-      try {
-        const u = new URL(href);
-        if (u.hostname === baseHost) {
-          const path = u.pathname + u.search;
-          const navUrlPatterns = [
-            /^\/?$/, /\/list\b/, /\/category\b/, /\/index\.php$/,
-            /[?&](mid|cat|category|act=disp|page=\d|search_target|search_keyword)=/,
-            /\/login/, /\/signup/, /\/register/, /\/member\//, /\/profile\//,
-            /\/policy/, /\/terms/, /\/rss/,
-          ];
-          if (navUrlPatterns.some(p => p.test(path))) { rejects.push(['nav-url', text + ' → ' + path]); return; }
+    // 4. "URL alone on a line" → use previous line as anchor (e.g. milemoa format)
+    const lines = text.split('\n');
+    const out = [];
+    const urlOnlyRe = /^(https?:\/\/[^\s<>"'`)\]]+)\s*$/;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const m = line.match(urlOnlyRe);
+      if (m) {
+        const cleanUrl = m[1].replace(/[.,;!?)\]\}>]+$/, '');
+        const prev = out.length > 0 ? out[out.length - 1] : '';
+        // Use previous line as anchor if it's short & descriptive (not already a link, not another URL)
+        if (prev && prev.length < 100 && !/^https?:\/\//.test(prev) && !/\]\(https?:/.test(prev)) {
+          const anchor = prev.replace(/^[#*\->=•·\s]+|[#*]+$/g, '').trim();
+          if (anchor.length >= 2) {
+            out.pop(); // remove the bare anchor line
+            out.push('[' + anchor + '](' + cleanUrl + ')');
+            continue;
+          }
         }
-      } catch { return; }
+        // Fallback: hostname as anchor
+        let host = cleanUrl;
+        try { host = new URL(cleanUrl).hostname.replace(/^www\./, ''); } catch {}
+        out.push('[' + host + '](' + cleanUrl + ')');
+        continue;
+      }
+      out.push(line);
+    }
+    text = out.join('\n');
 
-      seen.add(href);
-      links.push({ text: text.slice(0, 200), href });
+    // 5. Inline plain URLs (text + URL on same line) → wrap with hostname anchor
+    text = text.replace(/(^|[^\[\(])\b(https?:\/\/[^\s<>"'`)\]\(]+)/g, (full, before, rawUrl) => {
+      const cleanUrl = rawUrl.replace(/[.,;!?)\]\}>]+$/, '');
+      let host;
+      try { host = new URL(cleanUrl).hostname.replace(/^www\./, ''); }
+      catch { return full; }
+      return before + '[' + host + '](' + cleanUrl + ')';
     });
-    console.log('[wiki] extractLinks: kept=' + links.length + ', rejected=' + rejects.length + ', baseHost=' + baseHost);
-    if (rejects.length > 0) console.log('[wiki] extractLinks rejected samples:', rejects.slice(0, 8));
-    if (links.length > 0) console.log('[wiki] extractLinks kept samples:', links.slice(0, 8).map(l => l.text + ' → ' + l.href));
-    return links.slice(0, 40);
+
+    return text.replace(/\n{3,}/g, '\n\n').trim();
   },
+
 
   // Milemoa.com comment extractor — tries common Korean CMS selectors
   extractMilemoaComments(html) {
