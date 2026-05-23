@@ -691,7 +691,7 @@
 <!-- ── JAVASCRIPT ─────────────────────────────── -->
 <script>
 'use strict';
-const APP_VERSION = '1.5.9';
+const APP_VERSION = '1.6.0';
 document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
 // ─── FIREBASE CONFIG STORE ────────────────────────────────────────────────────
@@ -1786,6 +1786,28 @@ const W = {
         }
       }
 
+      // ── DUPLICATE URL CHECK: warn if this exact URL was already ingested into the same page ──
+      if (type === 'url' && sourceUrl && existingTopic?.content?.sources) {
+        const dup = existingTopic.content.sources.find(s => s.includes(sourceUrl));
+        if (dup) {
+          UI.hideProgress();
+          const dateM = dup.match(/^\[(\d{4}-\d{2}-\d{2})\]/);
+          const prevDate = dateM ? dateM[1] : 'unknown date';
+          const proceed = confirm(
+            '⚠️ This URL was already analyzed and saved to "' + existingTopic.title + '" on ' + prevDate + '.\n\n' +
+            'Re-analyzing will create a new version of the page.\n\n' +
+            'Continue anyway?'
+          );
+          if (!proceed) {
+            this._state = null;
+            UI.showToast?.('Cancelled — duplicate URL.');
+            return;
+          }
+          UI.showProgress(['Fetching content', 'Loading wiki structure', 'AI analysis']);
+          UI.setStep(0, 'done'); UI.setStep(1, 'done'); UI.setStep(2, 'done');
+        }
+      }
+
       // ── LINT: detect contradictions (only when updating an existing page, never blocks save) ──
       let contradictions = [];
       let lintDates = null;
@@ -1867,8 +1889,9 @@ const W = {
       if (p.existingTopic?.content?.sources) {
         for (const s of p.existingTopic.content.sources) {
           const dateM = s.match(/^\[(\d{4}-\d{2}-\d{2})\]/);
+          const urlM  = s.match(/—\s*(https?:\/\/\S+)/);
           const title = s.replace(/^\[.*?\]\s*/, '').replace(/\s*—\s*https?:\/\/.*$/, '');
-          sources.push({ date: dateM?.[1] || '?', title: title.slice(0,200), url: '' });
+          sources.push({ date: dateM?.[1] || '?', title: title.slice(0,200), url: urlM?.[1] || '' });
         }
       }
       sources.unshift({ date: p.date, title: p.sourceTitle.slice(0,200), url: p.sourceUrl });
