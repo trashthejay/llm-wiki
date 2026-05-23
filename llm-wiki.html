@@ -641,7 +641,7 @@
 <!-- ── JAVASCRIPT ─────────────────────────────── -->
 <script>
 'use strict';
-const APP_VERSION = '1.5.3';
+const APP_VERSION = '1.5.4';
 document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
 // ─── FIREBASE CONFIG STORE ────────────────────────────────────────────────────
@@ -1067,13 +1067,10 @@ const G = {
     let linkSection = '';
     if (links && links.length > 0) {
       linkSection = '\n\nLINKS FOUND IN THE ARTICLE BODY:\n' +
-        'The article text below uses markdown format [anchor](URL) to mark every link.\n' +
-        'CRITICAL — when you write "overview", every "sections" "content", "keyFacts", or "keyPoints":\n' +
-        '  • PRESERVE every [text](URL) marker you reference, EXACTLY as-is, inline in your writing.\n' +
-        '  • Example: "Use [Princeton Review](https://www.princetonreview.com/...) for free practice tests."\n' +
-        '  • Do NOT strip the URL. Do NOT convert to a bare URL. Keep the brackets and parentheses.\n' +
-        'Also include EVERY substantive link in the "references" array (skip only navigation/ads).\n\n' +
-        'Link list (for the "references" field):\n' +
+        'The following links were found in the article. Use them ONLY in the "references" field.\n' +
+        'In "overview", "sections" content, "keyFacts", and "keyPoints": write clean prose WITHOUT any [text](URL) markdown syntax.\n' +
+        'Mention tools/sites by name only (e.g. "Khan Academy", "satslayer.org") — no URLs or brackets in body text.\n\n' +
+        'Link list (for the "references" field only):\n' +
         links.map((l, i) => `${i+1}. "${l.text}" → ${l.href}`).join('\n').slice(0, 4000);
     }
 
@@ -1110,7 +1107,7 @@ Return a JSON object with EXACTLY these fields:
 
 IMPORTANT: "sections" must have 2-4 substantive sections. Each section "content" must be detailed — at least 3 paragraphs. This is a WIKI, not a summary.
 ${comments && comments.length ? '\nFor "expertComments": include only the insights that genuinely add value or correct errors. Empty array if none qualify.' : ''}
-${links && links.length ? '\nFor "references": include EVERY link from the LINKS list above (substantive ones the article actually references). Skip only obvious navigation.\nFor inline links: write [anchor text](URL) exactly as the article does — keep the markdown syntax intact in all writing.' : ''}
+${links && links.length ? '\nFor "references": include EVERY link from the LINKS list above (substantive ones the article actually references). Skip only obvious navigation.\nIMPORTANT: Body prose (overview, sections, keyFacts, keyPoints) must be plain text — NO [text](URL) markdown syntax anywhere in body fields.' : ''}
 
 FINAL CHECK BEFORE RETURNING: Re-read the LANGUAGE RULE at the top. Every "heading", "overview", "content", "keyFacts" item, "keyPoints" item, and "expertComments" item MUST be in the required language. Do NOT mix languages in reader-facing fields.
 
@@ -1363,9 +1360,19 @@ function _OLD_isValidNotionUrl_unused_removed(url) { return false; /* dead code 
 // Convert [text](url) markdown to plain text "text (url)" — Notion auto-detects
 // URLs in plain text and makes them clickable. This avoids the rich_text link
 // annotation that was rejecting some milemoa-style URLs with 400 Invalid URL.
+// Loops until stable to handle nested/malformed markdown Gemini sometimes generates.
 function markdownLinksToPlainText(text) {
-  return String(text || '').replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-    function(_, anchor, url) { return anchor + ' (' + url + ')'; });
+  let s = String(text || '');
+  let prev;
+  // Pass 1: convert well-formed [anchor](https://...) → anchor (url), repeat until stable
+  do {
+    prev = s;
+    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]*)\)/g,
+      function(_, anchor, url) { return anchor + ' (' + url + ')'; });
+  } while (s !== prev);
+  // Pass 2: strip any remaining [text](...) that slipped through (malformed URLs, etc.)
+  s = s.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
+  return s;
 }
 
 // Build Notion rich_text from a string — single plain text segment, no links.
