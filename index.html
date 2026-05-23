@@ -7,6 +7,9 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="My Wiki" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <title>Personal LLM Wiki</title>
   <!-- Firebase compat SDK (Google Auth) -->
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
@@ -639,7 +642,7 @@
 <!-- ── JAVASCRIPT ─────────────────────────────── -->
 <script>
 'use strict';
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.4.1';
 document.getElementById('version-badge').textContent = 'v' + APP_VERSION;
 
 // ─── FIREBASE CONFIG STORE ────────────────────────────────────────────────────
@@ -808,26 +811,38 @@ const F = {
     // Strip global non-content first
     d.querySelectorAll('script,style,nav,header,footer,aside,iframe,noscript,[role=navigation],[role=banner],[role=complementary]')
       .forEach(el => el.remove());
+    // Also strip common sidebar/widget class names that wrap nav menus
+    d.querySelectorAll('[class*="sidebar"],[class*="widget"],[class*="menu"],[class*="gnb"],[class*="lnb"],[id*="sidebar"],[id*="menu"]')
+      .forEach(el => el.remove());
 
-    // Try selectors in priority order — first one with >500 chars wins
+    // Try selectors in priority order — among matches, pick the one with longest text
     const selectors = [
-      // XpressEngine / Korean CMS (milemoa.com etc.)
-      '.rd_body', '.xe_content', '.read_body', '.document_content', '.rd_doc_content',
+      // XpressEngine / Korean CMS (milemoa.com etc.) — more specific first
+      '.rd_doc', '.rd_body', '.read_body', '.document_content', '.rd_doc_content',
       // Semantic HTML5
       'article', '[role=article]', '[itemprop=articleBody]',
       // Blog/CMS conventions
       '.post-content', '.entry-content', '.article-content', '.post-body',
       '.article__body', '.story-body', '.post__content',
+      // XpressEngine generic content (may match multiple — pick longest)
+      '.xe_content',
       // Generic fallbacks
       'main', '[role=main]',
     ];
+    let best = null, bestLen = 0, bestSel = '';
     for (const sel of selectors) {
-      const el = d.querySelector(sel);
-      if (el && (el.textContent || '').replace(/\s+/g, ' ').trim().length > 500) {
-        return el;
+      const matches = d.querySelectorAll(sel);
+      for (const el of matches) {
+        const len = (el.textContent || '').replace(/\s+/g, ' ').trim().length;
+        if (len > 500 && len > bestLen) {
+          best = el; bestLen = len; bestSel = sel;
+        }
       }
+      // If we found a hit on a more specific selector, prefer it over generic ones
+      if (best && bestLen > 1500) break;
     }
-    return d.body || d;
+    console.log('[wiki] findArticleBody: selector="' + bestSel + '", text length=' + bestLen);
+    return best || d.body || d;
   },
 
   // Convert a DOM element to plain text with <a> tags replaced by [text](url)
@@ -857,6 +872,7 @@ const F = {
     let baseHost = '';
     try { baseHost = new URL(baseUrl).hostname; } catch {}
 
+    let rejected = 0, kept = 0;
     bodyEl.querySelectorAll('a[href]').forEach(a => {
       let href = a.getAttribute('href');
       if (!href || href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('mailto:')) return;
@@ -872,10 +888,11 @@ const F = {
           const path = u.pathname + u.search;
           const navUrlPatterns = [
             /^\/?$/, /\/board\/?$/, /\/list\b/, /\/category\b/, /\/index\.php$/,
-            /[?&](mid|cat|board|act|page)=/, /\/login/, /\/signup/, /\/register/,
-            /\/member\//, /\/profile\//, /\/help/, /\/about/,
+            /[?&](mid|cat|category|board|act|page|page_no|search_target|search_keyword)=/,
+            /\/login/, /\/signup/, /\/register/, /\/member\//, /\/profile\//,
+            /\/help/, /\/about/, /\/policy/, /\/terms/, /\/contact/, /\/rss/,
           ];
-          if (navUrlPatterns.some(p => p.test(path))) return;
+          if (navUrlPatterns.some(p => p.test(path))) { rejected++; return; }
         }
       } catch { return; }
 
@@ -884,20 +901,25 @@ const F = {
         const img = a.querySelector('img');
         text = img ? (img.alt || '').trim() : '';
       }
-      if (!text || text.length < 4 || text.length > 200) return;
+      if (!text || text.length < 4 || text.length > 200) { rejected++; return; }
 
-      // Reject nav-style anchor text
-      const navTexts = ['전체', '더보기', '목록', '이전', '다음', '처음', '마지막',
-        'Home', 'Login', 'Sign up', 'Sign in', 'Register', '글쓰기', '댓글', '추천', '신고'];
-      if (navTexts.includes(text)) return;
+      // Reject nav-style anchor text (Korean + English common nav)
+      const navTexts = ['전체', '더보기', '목록', '이전', '다음', '처음', '마지막', '글쓰기', '댓글', '추천', '신고', '신청', '취소',
+        '로그인', '회원가입', '마이페이지', '검색', '공지',
+        'Home', 'Login', 'Sign up', 'Sign in', 'Register', 'Subscribe', 'Search', 'Menu', 'Next', 'Previous', 'More'];
+      if (navTexts.includes(text)) { rejected++; return; }
       // Reject pure numbers
-      if (/^\d+$/.test(text)) return;
-      // Reject "Category Name 1234" pattern (forum board listings)
-      if (/^[가-힯A-Za-z][가-힯A-Za-z0-9\-_·]{0,15}(\s+[가-힯A-Za-z\-]{1,10})?\s+\d{1,7}$/.test(text)) return;
+      if (/^\d+$/.test(text)) { rejected++; return; }
+      // Reject "Category Name 1234" / "Cat-Sub 1234" (Korean OR English) — forum board listings
+      if (/^[가-힯A-Za-z][가-힯A-Za-z0-9\-_·]{0,18}(\s*-\s*[가-힯A-Za-z][가-힯A-Za-z0-9\-_·]{0,15}){0,3}\s+\d{1,7}$/.test(text)) { rejected++; return; }
+      // Reject "Text(123)" / "Text [123]" pagination/count badges
+      if (/^.{1,30}\s*[\(\[]\d+[\)\]]\s*$/.test(text)) { rejected++; return; }
 
       seen.add(href);
+      kept++;
       links.push({ text: text.slice(0, 200), href });
     });
+    console.log('[wiki] extractLinks: kept=' + kept + ', rejected=' + rejected + ', baseHost=' + baseHost);
     return links.slice(0, 40);
   },
 
